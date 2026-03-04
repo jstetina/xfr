@@ -90,10 +90,26 @@ run_json_test()
 		echo "  raw output: $output" | head -5
 		FAILED=1
 		LAST_MBPS=0
+		LAST_RTX=0
+		LAST_RTT_US=0
+		LAST_CWND=0
 		return
 	fi
 	LAST_MBPS="$result"
-	echo "  $desc: ${LAST_MBPS} Mbps"
+	# Extract final tcp_info fields from pretty-printed JSON.
+	local tcp_info_block
+	tcp_info_block=$(echo "$output" | sed -n '/"tcp_info"/,/}/p')
+	LAST_RTX=$(echo "$tcp_info_block" | grep '"retransmits"' | head -1 | grep -o '[0-9]*')
+	LAST_RTT_US=$(echo "$tcp_info_block" | grep '"rtt_us"' | head -1 | grep -o '[0-9]*')
+	LAST_CWND=$(echo "$tcp_info_block" | grep '"cwnd"' | head -1 | grep -o '[0-9]*')
+	LAST_RTX="${LAST_RTX:-0}"
+	LAST_RTT_US="${LAST_RTT_US:-0}"
+	LAST_CWND="${LAST_CWND:-0}"
+	if [[ -z "$tcp_info_block" ]]; then
+		echo "  $desc: ${LAST_MBPS} Mbps (no tcp_info in output)"
+	else
+		echo "  $desc: ${LAST_MBPS} Mbps, rtx: ${LAST_RTX}, rtt_us: ${LAST_RTT_US}, cwnd: ${LAST_CWND}"
+	fi
 }
 
 setup()
@@ -162,6 +178,19 @@ assert_gt()
 	fi
 }
 
+# Assert sender-side TCP_INFO was populated in the final JSON result.
+# Retransmits may legitimately be zero on a clean run, so use RTT/cwnd instead.
+assert_sender_tcp_info()
+{
+	local label="$1"
+	if [[ "${LAST_RTT_US:-0}" -le 0 || "${LAST_CWND:-0}" -le 0 ]]; then
+		echo "FAIL: $label — expected sender-side TCP_INFO (rtt_us > 0, cwnd > 0), got rtt_us=${LAST_RTT_US:-0}, cwnd=${LAST_CWND:-0}"
+		FAILED=1
+	else
+		echo "  PASS: $label (rtt_us=${LAST_RTT_US}, cwnd=${LAST_CWND})"
+	fi
+}
+
 setup "${@}"
 xfr_srv
 
@@ -176,6 +205,7 @@ if [[ "$CI" == "true" ]]; then
 	run_json_test "TCP upload" xfr_cli_tcp -t "$DURATION"
 	TCP_MBPS="$LAST_MBPS"
 	assert_gt "$TCP_MBPS" 10 "TCP throughput > 10 Mbps"
+	assert_sender_tcp_info "TCP upload sender-side TCP_INFO present (#26)"
 
 	echo ""
 	echo "--- MPTCP upload (both paths, expect ~30 Mbps) ---"
@@ -183,6 +213,7 @@ if [[ "$CI" == "true" ]]; then
 	MPTCP_MBPS="$LAST_MBPS"
 	assert_gt "$MPTCP_MBPS" "$TCP_MBPS" "MPTCP throughput > TCP throughput"
 	assert_gt "$MPTCP_MBPS" 20 "MPTCP throughput > 20 Mbps (proves multi-path)"
+	assert_sender_tcp_info "MPTCP upload sender-side TCP_INFO present (#26)"
 
 	echo ""
 	echo "--- MPTCP reverse (download, expect ~30 Mbps) ---"
