@@ -4,7 +4,7 @@
   <img src="xfr-logo.png" alt="xfr logo" width="200">
 </p>
 
-A modern iperf3 alternative with a live TUI, multi-client server, and QUIC support. Built in Rust.
+A modern iperf3 alternative with a live TUI, multi-client server, MPTCP, and QUIC support. Built in Rust.
 
 [![Crates.io](https://img.shields.io/crates/v/xfr.svg)](https://crates.io/crates/xfr)
 [![CI](https://github.com/lance0/xfr/actions/workflows/ci.yml/badge.svg)](https://github.com/lance0/xfr/actions/workflows/ci.yml)
@@ -37,7 +37,7 @@ See [Installation](#installation) below for setup instructions.
 - **Live TUI** with real-time throughput graphs and per-stream stats
 - **Server dashboard** - `xfr serve --tui` for monitoring active tests
 - **Multi-client server** - handle multiple simultaneous tests
-- **TCP, UDP, and QUIC** with configurable bitrate pacing and parallel streams
+- **TCP, UDP, QUIC, and MPTCP** with configurable bitrate pacing and parallel streams
 - **Firewall-friendly** - single-port TCP, QUIC multiplexing, and `--cport` for pinning UDP/QUIC source ports
 - **Bidirectional testing** - measure upload and download simultaneously
 - **Multiple output formats** - plain text, JSON, JSON streaming, CSV
@@ -53,6 +53,7 @@ See [Installation](#installation) below for setup instructions.
 |---------|--------|-----|
 | Live TUI | No | Yes (client & server) |
 | Multi-client server | No | Yes |
+| MPTCP | No | Yes (auto on server, `--mptcp` on client, Linux 5.6+) |
 | Firewall-friendly | `--cport` (TCP/UDP) | Single-port TCP + `--cport` (UDP/QUIC) |
 | Output formats | Text/JSON | Text/JSON/CSV |
 | Prometheus metrics | No | Yes (optional feature) |
@@ -264,6 +265,16 @@ QUIC provides built-in TLS 1.3 encryption with stream multiplexing over a single
 
 **Security Note:** QUIC encrypts traffic but does not verify server identity by default. For authenticated connections, use `--psk` on both client and server to prevent MITM attacks.
 
+### MPTCP Mode
+
+```bash
+xfr 192.168.1.1 --mptcp       # MPTCP (Multi-Path TCP, Linux 5.6+)
+xfr 192.168.1.1 --mptcp -P 4  # MPTCP with 4 parallel streams
+xfr 192.168.1.1 --mptcp -R    # MPTCP download test
+```
+
+MPTCP enables a single connection to use multiple network paths simultaneously (e.g., WiFi + Ethernet). The server automatically creates MPTCP listeners — no flag needed on the server side. All TCP features (nodelay, congestion control, window size, bidir, multi-stream) work transparently with MPTCP.
+
 ### Output Formats
 
 ```bash
@@ -401,6 +412,7 @@ See `examples/grafana-dashboard.json` for a sample Grafana dashboard.
 | `--ipv6` | `-6` | false | Force IPv6 only |
 | `--bind` | | none | Local address to bind (e.g., 192.168.1.100) |
 | `--cport` | | none | Client source port for firewall traversal (UDP/QUIC) |
+| `--mptcp` | | false | MPTCP mode (client-only, Linux 5.6+; server auto-enables) |
 | `--json` | | false | JSON output |
 | `--json-stream` | | false | JSON per interval |
 | `--csv` | | false | CSV output |

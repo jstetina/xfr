@@ -125,7 +125,8 @@
 - [x] **Multi-port TCP IP validation** - per-stream fallback listeners validate peer IP against control connection
 
 ### Polish
-- [ ] **Suppress send errors on graceful shutdown** - TCP shows `Connection reset by peer (os error 104)`, UDP shows `Connection refused (os error 111)`, QUIC shows `sending stopped by peer: error 0` when server tears down sockets before client finishes sending; cosmetic but noisy
+- [x] **Suppress TCP send errors on graceful shutdown** - TCP `Connection reset by peer` / `Broken pipe` / `Connection aborted` at teardown now suppressed via targeted grace window (issue #25)
+- [ ] **Suppress UDP/QUIC send errors on graceful shutdown** - UDP shows `Connection refused (os error 111)`, QUIC shows `sending stopped by peer: error 0` when server tears down sockets before client finishes sending; cosmetic but noisy
 
 ### Code Quality
 - [ ] **Test lifecycle guard** - wrap active_tests entries in a `Drop` guard so cleanup runs regardless of handler panic/error; covers orphaned state on control disconnect, semaphore permit leak, and QUIC handler cleanup. Consider DashMap to reduce lock contention at higher concurrency
@@ -140,7 +141,7 @@
 - [x] **Add SAFETY comments** - document invariants for 4 unsafe blocks in tcp_info.rs, tcp.rs, net.rs
 - [ ] **Audit unwrap()/expect() calls** - reduce calls in production code, especially auth.rs HMAC init and serve.rs PSK handling
 - [ ] **Remove unused dependencies** - once_cell→OnceLock, evaluate futures, humantime, async-trait
-- [ ] **Join client data tasks** - ensure Client::run waits for all data tasks before returning (library safety)
+- [x] **Join client data tasks** - Client::run now collects JoinHandles and joins with 2s timeout + abort before returning
 - [ ] **Extract shared handshake logic** - ~100+ lines duplicated between TCP and QUIC paths in both serve.rs and client.rs
 
 ### Testing
@@ -165,7 +166,7 @@
 ### Quick Wins (low effort, high impact)
 - [x] **Congestion control** (`--congestion`) - select TCP CC algorithm (cubic, bbr, reno); just a `setsockopt` call. High demand for BBR vs CUBIC comparison on WAN/cloud links
 - [x] **Live TCP_INFO polling** - periodically sample RTT, retransmits, cwnd during test (issue #13); extends existing TCP_INFO code. Essential for `-t 0` where results are never finalized
-- [x] **TCP bitrate pacing** (`-b` for TCP) - byte-budget sleep pacing with interruptible sleeps and buffer auto-capping; `-b` flag now applies to TCP and UDP (issue #14)
+- [x] **TCP bitrate pacing** (`-b` for TCP) - byte-budget sleep pacing with interruptible sleeps and buffer auto-capping; `-b` flag now applies to TCP and UDP (issue #14). On Linux, uses kernel `SO_MAX_PACING_RATE` for precise per-packet pacing via the FQ scheduler (issue #30)
 - [x] **Client source port pinning** (`--cport`) - pin local port for firewall traversal (issue #16); UDP uses sequential ports for multi-stream (`-P 4` → ports 5300-5303), QUIC multiplexes on single port. See decision tree below
 - [ ] **Configurable UDP packet size** (`--packet-size`) - set UDP datagram size for jumbo frame validation and MTU path testing; iperf3 `--set-mss` is TCP-only (issue esnet/iperf#861)
 - [ ] **Get server output** (`--get-server-output`) - return server's JSON result to client (iperf3 parity)
@@ -266,9 +267,11 @@ Client behind strict firewall → which protocol?
 *Rationale: Niche use case, rarely needed.*
 
 ### MPTCP
-- [ ] Multi-Path TCP support
+- [x] Multi-Path TCP support (`--mptcp` client flag, Linux 5.6+)
+- [x] Server auto-MPTCP (try MPTCP listeners by default, silent fallback to TCP)
+- [ ] `MPTCP_FULL_INFO` per-subflow stats (RTT, cwnd per path via `MPTCP_INFO` / `TCP_INFO` per subflow)
 
-*Rationale: Very few deployments have MPTCP enabled.*
+*Rationale: Simple socket-level change via socket2. Requested by kernel MPTCP co-maintainer (issue #24). Per-subflow stats via `MPTCP_FULL_INFO` would show multi-path behavior in the TUI.*
 
 ### 100G+ Optimization
 - [ ] io_uring on Linux

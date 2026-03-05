@@ -13,7 +13,7 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 /// Maximum control message line length to prevent memory DoS
-const MAX_LINE_LENGTH: usize = 8192;
+const MAX_LINE_LENGTH: usize = 65536;
 
 use crate::auth;
 use crate::net::{self, AddressFamily};
@@ -57,6 +57,8 @@ pub struct ClientConfig {
     pub bind_addr: Option<SocketAddr>,
     /// Use sequential ports for multi-stream (--cport with -P)
     pub sequential_ports: bool,
+    /// Use MPTCP (Multi-Path TCP) instead of regular TCP
+    pub mptcp: bool,
 }
 
 impl Default for ClientConfig {
@@ -76,6 +78,7 @@ impl Default for ClientConfig {
             address_family: AddressFamily::default(),
             bind_addr: None,
             sequential_ports: false,
+            mptcp: false,
         }
     }
 }
@@ -143,6 +146,7 @@ impl Client {
             self.config.port,
             self.config.address_family,
             self.config.bind_addr,
+            self.config.mptcp,
         )
         .await?;
 
@@ -259,6 +263,7 @@ impl Client {
             direction: self.config.direction,
             bitrate: self.config.bitrate,
             congestion: self.config.tcp_congestion.clone(),
+            mptcp: self.config.mptcp,
         };
         writer
             .write_all(format!("{}\n", test_start.serialize()?).as_bytes())
@@ -312,7 +317,7 @@ impl Client {
         *self.pause_request_tx.lock() = Some(pause_request_tx);
 
         // Connect data streams using the resolved IP from control connection
-        match self.config.protocol {
+        let stream_handles = match self.config.protocol {
             Protocol::Tcp => {
                 self.spawn_tcp_streams(
                     &data_ports,
@@ -322,7 +327,7 @@ impl Client {
                     &test_id,
                     pause_rx.clone(),
                 )
-                .await?;
+                .await?
             }
             Protocol::Udp => {
                 self.spawn_udp_streams(
@@ -332,7 +337,7 @@ impl Client {
                     cancel_rx.clone(),
                     pause_rx.clone(),
                 )
-                .await?;
+                .await?
             }
             Protocol::Quic => {
                 // QUIC uses its own connection model - should not reach here
@@ -340,7 +345,7 @@ impl Client {
                     "QUIC protocol uses run_quic(), not run_test()"
                 ));
             }
-        }
+        };
 
         // Read interval updates and final result with timeout
         // For infinite duration, use 1 year timeout (effectively no timeout)
@@ -350,6 +355,9 @@ impl Client {
             self.config.duration + Duration::from_secs(30)
         };
         let deadline = tokio::time::Instant::now() + timeout_duration;
+
+        let mut test_result: anyhow::Result<TestResult> =
+            Err(anyhow::anyhow!("Connection closed without result"));
 
         loop {
             // Check for external cancel request while waiting for server messages
@@ -364,13 +372,13 @@ impl Client {
                             // Got data, process it below
                         }
                         Ok(Err(e)) => {
-                            let _ = cancel_tx.send(true);
-                            return Err(e);
+                            test_result = Err(e);
+                            break;
                         }
                         Err(_) => {
                             // Timeout
-                            let _ = cancel_tx.send(true);
-                            return Err(anyhow::anyhow!("Timeout waiting for server response"));
+                            test_result = Err(anyhow::anyhow!("Timeout waiting for server response"));
+                            break;
                         }
                     }
                 }
@@ -381,7 +389,16 @@ impl Client {
                             id: test_id.clone(),
                             reason: "User requested cancellation".to_string(),
                         };
-                        let _ = writer.write_all(format!("{}\n", cancel_msg.serialize()?).as_bytes()).await;
+                        let serialized = match cancel_msg.serialize() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                test_result = Err(anyhow::anyhow!("Failed to serialize cancel message: {}", e));
+                                break;
+                            }
+                        };
+                        let _ = writer
+                            .write_all(format!("{}\n", serialized).as_bytes())
+                            .await;
                         let _ = cancel_tx.send(true);
                         // Continue loop to receive Cancelled response
                     }
@@ -397,7 +414,18 @@ impl Client {
                         } else {
                             ControlMessage::Resume { id: test_id.clone() }
                         };
-                        if writer.write_all(format!("{}\n", msg.serialize()?).as_bytes()).await.is_err() {
+                        let serialized = match msg.serialize() {
+                            Ok(s) => s,
+                            Err(e) => {
+                                test_result = Err(anyhow::anyhow!("Failed to serialize pause/resume message: {}", e));
+                                break;
+                            }
+                        };
+                        if writer
+                            .write_all(format!("{}\n", serialized).as_bytes())
+                            .await
+                            .is_err()
+                        {
                             warn!("Failed to send pause/resume to server");
                         }
                     }
@@ -408,7 +436,13 @@ impl Client {
                 continue;
             }
 
-            let msg: ControlMessage = ControlMessage::deserialize(line.trim())?;
+            let msg: ControlMessage = match ControlMessage::deserialize(line.trim()) {
+                Ok(msg) => msg,
+                Err(e) => {
+                    test_result = Err(anyhow::anyhow!("Failed to parse server message: {}", e));
+                    break;
+                }
+            };
 
             match msg {
                 ControlMessage::Interval {
@@ -444,17 +478,34 @@ impl Client {
                             .await;
                     }
                 }
-                ControlMessage::Result(result) => {
-                    let _ = cancel_tx.send(true);
-                    return Ok(result);
+                ControlMessage::Result(mut result) => {
+                    // Server (receiver) can't report sender-side TCP_INFO metrics
+                    // (retransmits, RTT, cwnd are all 0 on receiver side).
+                    // Overlay client-side snapshots when we're the sender.
+                    let is_sender =
+                        matches!(self.config.direction, Direction::Upload | Direction::Bidir);
+                    if is_sender {
+                        for (i, stream_result) in result.streams.iter_mut().enumerate() {
+                            if let Some(info) =
+                                stats.streams.get(i).and_then(|s| s.final_tcp_info())
+                            {
+                                stream_result.retransmits = Some(info.retransmits);
+                            }
+                        }
+                        if let Some(info) = stats.final_local_tcp_info() {
+                            result.tcp_info = Some(info);
+                        }
+                    }
+                    test_result = Ok(result);
+                    break;
                 }
                 ControlMessage::Error { message } => {
-                    let _ = cancel_tx.send(true);
-                    return Err(anyhow::anyhow!("Server error: {}", message));
+                    test_result = Err(anyhow::anyhow!("Server error: {}", message));
+                    break;
                 }
                 ControlMessage::Cancelled { .. } => {
-                    let _ = cancel_tx.send(true);
-                    return Err(anyhow::anyhow!("Test was cancelled"));
+                    test_result = Err(anyhow::anyhow!("Test was cancelled"));
+                    break;
                 }
                 _ => {
                     debug!("Unexpected message: {:?}", msg);
@@ -462,7 +513,33 @@ impl Client {
             }
         }
 
-        Err(anyhow::anyhow!("Connection closed without result"))
+        // Signal stream tasks to stop and wait for them to finish cleanly
+        let _ = cancel_tx.send(true);
+        let mut stream_handles = stream_handles;
+        match tokio::time::timeout(
+            Duration::from_secs(2),
+            futures::future::join_all(stream_handles.iter_mut()),
+        )
+        .await
+        {
+            Ok(results) => {
+                for result in results {
+                    if let Err(e) = result
+                        && e.is_panic()
+                    {
+                        error!("Data stream task panicked: {:?}", e);
+                    }
+                }
+            }
+            Err(_) => {
+                warn!("Timed out waiting for data streams to stop; aborting remaining tasks");
+                for handle in &stream_handles {
+                    handle.abort();
+                }
+            }
+        }
+
+        test_result
     }
 
     async fn spawn_tcp_streams(
@@ -473,11 +550,19 @@ impl Client {
         cancel: watch::Receiver<bool>,
         test_id: &str,
         pause: watch::Receiver<bool>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
         // Single-port mode: connect all streams to control port with DataHello
         let single_port_mode = data_ports.is_empty();
         let control_port = self.config.port;
         let test_id = test_id.to_string();
+
+        if !single_port_mode && data_ports.len() != self.config.streams as usize {
+            return Err(anyhow::anyhow!(
+                "Server returned {} data ports but {} streams were requested",
+                data_ports.len(),
+                self.config.streams
+            ));
+        }
 
         let per_stream_bitrate = self.config.bitrate.map(|b| {
             if b == 0 {
@@ -487,19 +572,14 @@ impl Client {
             }
         });
 
+        let mut handles = Vec::new();
+
         #[allow(clippy::needless_range_loop)] // Intentional: single-port mode has empty data_ports
         for i in 0..self.config.streams as usize {
             let port = if single_port_mode {
                 control_port
             } else {
-                // Bounds check: server may return fewer ports than requested streams
-                *data_ports.get(i).ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "Server returned {} data ports but {} streams were requested",
-                        data_ports.len(),
-                        self.config.streams
-                    )
-                })?
+                data_ports[i]
             };
             let addr = SocketAddr::new(server_addr.ip(), port);
             let stream_stats = stats.streams[i].clone();
@@ -508,6 +588,7 @@ impl Client {
             let direction = self.config.direction;
             let duration = self.config.duration;
             let bind_addr = self.config.bind_addr;
+            let mptcp = self.config.mptcp;
             let test_id = test_id.clone();
             let stream_index = i as u16;
 
@@ -518,8 +599,8 @@ impl Client {
             );
             config.congestion = self.config.tcp_congestion.clone();
 
-            tokio::spawn(async move {
-                match net::connect_tcp_with_bind(addr, bind_addr).await {
+            handles.push(tokio::spawn(async move {
+                match net::connect_tcp_with_bind(addr, bind_addr, mptcp).await {
                     Ok(mut stream) => {
                         debug!("Connected to data port {}", port);
 
@@ -555,7 +636,7 @@ impl Client {
                         match direction {
                             Direction::Upload => {
                                 // Client sends data
-                                if let Err(e) = tcp::send_data(
+                                match tcp::send_data(
                                     stream,
                                     stream_stats.clone(),
                                     duration,
@@ -566,7 +647,9 @@ impl Client {
                                 )
                                 .await
                                 {
-                                    error!("Send error: {}", e);
+                                    Ok(Some(info)) => stream_stats.set_final_tcp_info(info),
+                                    Ok(None) => {}
+                                    Err(e) => error!("Send error: {}", e),
                                 }
                             }
                             Direction::Download => {
@@ -603,8 +686,8 @@ impl Client {
                                 };
                                 let recv_config = config;
 
-                                let send_handle = tokio::spawn(async move {
-                                    if let Err(e) = tcp::send_data_half(
+                                let (send_result, recv_result) = tokio::join!(
+                                    tcp::send_data_half(
                                         write_half,
                                         send_stats,
                                         duration,
@@ -612,27 +695,28 @@ impl Client {
                                         send_cancel,
                                         per_stream_bitrate,
                                         send_pause,
-                                    )
-                                    .await
-                                    {
-                                        error!("Bidir send error: {}", e);
-                                    }
-                                });
-
-                                let recv_handle = tokio::spawn(async move {
-                                    if let Err(e) = tcp::receive_data_half(
+                                    ),
+                                    tcp::receive_data_half(
                                         read_half,
                                         recv_stats,
                                         recv_cancel,
                                         recv_config,
                                     )
-                                    .await
-                                    {
-                                        error!("Bidir receive error: {}", e);
-                                    }
-                                });
+                                );
 
-                                let _ = tokio::join!(send_handle, recv_handle);
+                                if let Err(e) = &send_result {
+                                    error!("Bidir send error: {}", e);
+                                }
+                                if let Err(e) = &recv_result {
+                                    error!("Bidir receive error: {}", e);
+                                }
+
+                                if let (Ok(write_half), Ok(read_half)) = (send_result, recv_result)
+                                    && let Ok(stream) = read_half.reunite(write_half)
+                                    && let Some(info) = tcp::get_stream_tcp_info(&stream)
+                                {
+                                    stream_stats.set_final_tcp_info(info);
+                                }
                             }
                         }
                         stream_stats.clear_tcp_info_fd();
@@ -641,12 +725,12 @@ impl Client {
                         error!("Failed to connect to data port {}: {}", port, e);
                     }
                 }
-            });
+            }));
         }
 
         // Give streams time to connect
         tokio::time::sleep(Duration::from_millis(100)).await;
-        Ok(())
+        Ok(handles)
     }
 
     async fn spawn_udp_streams(
@@ -656,7 +740,7 @@ impl Client {
         stats: Arc<TestStats>,
         cancel: watch::Receiver<bool>,
         pause: watch::Receiver<bool>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<tokio::task::JoinHandle<()>>> {
         let base_bind_addr = if self.config.sequential_ports {
             let addr = self.config.bind_addr.ok_or_else(|| {
                 anyhow::anyhow!(
@@ -701,6 +785,8 @@ impl Client {
             ));
         }
 
+        let mut handles = Vec::new();
+
         for (i, &port) in data_ports.iter().enumerate() {
             let server_port = SocketAddr::new(server_addr.ip(), port);
             let stream_stats = stats.streams[i].clone();
@@ -719,7 +805,7 @@ impl Client {
                 base_bind_addr
             };
 
-            tokio::spawn(async move {
+            handles.push(tokio::spawn(async move {
                 // Create UDP socket matching the server's address family for cross-platform compatibility.
                 // macOS dual-stack sockets behave differently than Linux, so we match the server's family.
                 let socket = if let Some(local) = bind_addr {
@@ -825,11 +911,11 @@ impl Client {
                         let _ = tokio::join!(send_handle, recv_handle);
                     }
                 }
-            });
+            }));
         }
 
         tokio::time::sleep(Duration::from_millis(100)).await;
-        Ok(())
+        Ok(handles)
     }
 
     /// Run a test using QUIC transport
@@ -949,6 +1035,7 @@ impl Client {
             direction: self.config.direction,
             bitrate: self.config.bitrate,
             congestion: None,
+            mptcp: false,
         };
         ctrl_send
             .write_all(format!("{}\n", test_start.serialize()?).as_bytes())

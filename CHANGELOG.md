@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **MPTCP support** (`--mptcp`) - Multi-Path TCP on Linux 5.6+ (issue #24). Uses `IPPROTO_MPTCP` at socket creation via socket2 — all TCP features (nodelay, congestion control, window size, bidir, multi-stream, single-port mode) work transparently. The server automatically creates MPTCP listeners when available (no flag needed) — MPTCP listeners accept both MPTCP and regular TCP clients transparently, with silent fallback to TCP if the kernel lacks MPTCP support. Client uses `--mptcp` to opt in. Clear error message on non-Linux clients or kernels without `CONFIG_MPTCP=y`.
+- **Kernel TCP pacing via `SO_MAX_PACING_RATE`** (issue #30) - On Linux, TCP bitrate pacing (`-b`) now uses the kernel's FQ scheduler with EDT (Earliest Departure Time) for precise per-packet timing, eliminating burst behavior from userspace sleep/wake cycles. Falls back to userspace pacing on non-Linux or if the setsockopt fails. Suggested by the kernel MPTCP maintainer.
+
+### Changed
+- **Library API** — `create_tcp_listener()`, `connect_tcp()`, and `connect_tcp_with_bind()` now take a `mptcp: bool` parameter. Library consumers should pass `false` to preserve existing behavior.
+
+### Fixed
+- **JoinHandle panic with many parallel streams** (issue #24) — removed second `join_all` after aborting timed-out stream tasks, which polled already-completed handles
+- **Final summary showing 0 retransmits/RTT/cwnd** (issue #26) — each stream task now captures a final sender-side TCP_INFO snapshot before the socket closes; the Result handler overlays these saved snapshots deterministically instead of racing live fd polls
+- **Broken pipe / connection reset at teardown** (issue #25) — client now joins stream task handles with a 2s timeout before returning, preventing writes to already-closed sockets
+- **MPTCP label in server log** — server now displays "MPTCP" instead of "TCP" in the test info log when client uses `--mptcp`; adds backward-compatible `mptcp` field to TestStart control message
+
 ## [0.8.0] - 2026-02-12
 
 ### Added

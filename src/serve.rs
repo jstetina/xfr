@@ -28,7 +28,7 @@ use crate::udp;
 use tokio::sync::mpsc;
 
 /// Maximum control message line length to prevent memory DoS
-const MAX_LINE_LENGTH: usize = 8192;
+const MAX_LINE_LENGTH: usize = 65536;
 /// Maximum streams a client can request
 const MAX_STREAMS: u8 = 128;
 /// Maximum test duration a client can request (1 hour)
@@ -136,7 +136,8 @@ impl Server {
 
     pub async fn run(&self) -> anyhow::Result<()> {
         let listener =
-            net::create_tcp_listener(self.config.port, self.config.address_family).await?;
+            net::create_tcp_listener_auto_mptcp(self.config.port, self.config.address_family)
+                .await?;
 
         // Create QUIC endpoint on the same port (UDP) - only if enabled
         let quic_endpoint = if self.config.enable_quic {
@@ -818,8 +819,7 @@ async fn handle_quic_client(
             streams,
             duration_secs,
             direction,
-            bitrate: _,
-            congestion: _,
+            ..
         } => {
             if protocol != Protocol::Quic {
                 let error = ControlMessage::error("Expected QUIC protocol for QUIC connection");
@@ -1169,6 +1169,7 @@ async fn handle_test_request(
             direction,
             bitrate,
             congestion,
+            mptcp,
         } => {
             // Validate stream count
             if streams == 0 || streams > MAX_STREAMS {
@@ -1235,9 +1236,18 @@ async fn handle_test_request(
             } else {
                 format!("{}s", duration.as_secs())
             };
+            let protocol_display = if mptcp && protocol == Protocol::Tcp {
+                "MPTCP"
+            } else {
+                match protocol {
+                    Protocol::Tcp => "TCP",
+                    Protocol::Udp => "UDP",
+                    Protocol::Quic => "QUIC",
+                }
+            };
             info!(
                 "Test requested: {} {} streams, {} mode, {}",
-                protocol, streams, direction, duration_display
+                protocol_display, streams, direction, duration_display
             );
 
             // Run the actual test
@@ -1611,7 +1621,7 @@ async fn run_test(
             let (tx, rx) = mpsc::channel::<(TcpStream, u16)>(streams as usize);
             let expected_ip = net::normalize_ip(peer_addr.ip());
             for i in 0..streams {
-                let listener = net::create_tcp_listener(0, address_family).await?;
+                let listener = net::create_tcp_listener_auto_mptcp(0, address_family).await?;
                 data_ports.push(listener.local_addr()?.port());
                 debug!(
                     "TCP data port {} allocated for stream {}",

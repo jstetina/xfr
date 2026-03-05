@@ -37,10 +37,15 @@ fn test_test_start_roundtrip() {
         direction: Direction::Upload,
         bitrate: None,
         congestion: Some("bbr".to_string()),
+        mptcp: false,
     };
 
     let json = msg.serialize().unwrap();
     assert!(json.contains("\"congestion\":\"bbr\""));
+    assert!(
+        !json.contains("\"mptcp\""),
+        "mptcp=false should be omitted for backward compatibility"
+    );
     let decoded = ControlMessage::deserialize(&json).unwrap();
 
     match decoded {
@@ -52,6 +57,7 @@ fn test_test_start_roundtrip() {
             direction,
             bitrate,
             congestion,
+            ..
         } => {
             assert_eq!(id, "test-123");
             assert_eq!(protocol, Protocol::Tcp);
@@ -60,6 +66,21 @@ fn test_test_start_roundtrip() {
             assert_eq!(direction, Direction::Upload);
             assert!(bitrate.is_none());
             assert_eq!(congestion, Some("bbr".to_string()));
+        }
+        _ => panic!("Wrong message type"),
+    }
+}
+
+#[test]
+fn test_test_start_backward_compat_without_mptcp_field() {
+    // Simulates an older client that doesn't send the mptcp field.
+    let json = r#"{"type":"test_start","id":"legacy-123","protocol":"tcp","streams":2,"duration_secs":15,"direction":"upload"}"#;
+    let decoded = ControlMessage::deserialize(json).unwrap();
+
+    match decoded {
+        ControlMessage::TestStart { id, mptcp, .. } => {
+            assert_eq!(id, "legacy-123");
+            assert!(!mptcp);
         }
         _ => panic!("Wrong message type"),
     }
@@ -75,6 +96,7 @@ fn test_udp_test_start() {
         direction: Direction::Download,
         bitrate: Some(1_000_000_000),
         congestion: None,
+        mptcp: false,
     };
 
     let json = msg.serialize().unwrap();
@@ -209,6 +231,52 @@ fn test_result_message() {
     assert!(json.contains("\"bytes_total\":1250000000"));
     assert!(json.contains("\"throughput_mbps\":1000.0"));
     assert!(json.contains("\"rtt_us\":1234"));
+}
+
+#[test]
+fn test_large_result_message_exceeds_old_8k_guard_but_fits_64k() {
+    // Regression coverage for high parallel stream counts on control channel:
+    // - old guard (8192) was too small
+    // - new guard (65536) should still provide DoS protection
+    let streams: Vec<StreamResult> = (0u8..128u8)
+        .map(|i| StreamResult {
+            id: i,
+            bytes: u64::MAX,
+            throughput_mbps: 99_999_999.9,
+            retransmits: Some(u64::MAX),
+            jitter_ms: None,
+            lost: None,
+        })
+        .collect();
+
+    let result = TestResult {
+        id: "wide-result".to_string(),
+        bytes_total: u64::MAX,
+        duration_ms: 10_000,
+        throughput_mbps: 99_999_999.9,
+        streams,
+        tcp_info: Some(TcpInfoSnapshot {
+            retransmits: u64::MAX,
+            rtt_us: 1234,
+            rtt_var_us: 567,
+            cwnd: u32::MAX,
+        }),
+        udp_stats: None,
+    };
+
+    let msg = ControlMessage::Result(result);
+    let json = msg.serialize().unwrap();
+
+    assert!(
+        json.len() > 8192,
+        "test fixture should exceed old 8KB guard, got {} bytes",
+        json.len()
+    );
+    assert!(
+        json.len() < 65536,
+        "control message should remain under 64KB guard, got {} bytes",
+        json.len()
+    );
 }
 
 #[test]

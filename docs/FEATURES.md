@@ -18,7 +18,7 @@ xfr <host> --congestion bbr    # Use BBR congestion control
 
 TCP provides:
 - Reliable, ordered delivery
-- Bitrate pacing (`-b`) with byte-budget sleep approach
+- Bitrate pacing (`-b`) — on Linux, uses kernel `SO_MAX_PACING_RATE` with the FQ scheduler for precise per-packet timing; falls back to userspace byte-budget sleep pacing on other platforms
 - Selectable congestion control (`--congestion cubic`, `--congestion bbr`, `--congestion reno`)
 - TCP_INFO statistics (RTT, retransmits, cwnd) — polled live per interval, not just at test end
 
@@ -63,6 +63,33 @@ QUIC provides:
 - Head-of-line blocking avoidance
 
 **Security Note**: QUIC encrypts traffic but uses self-signed certificates by default. For authenticated connections, combine with `--psk` to prevent MITM attacks.
+
+### MPTCP (Multi-Path TCP)
+
+Multi-Path TCP enables a single connection to use multiple network paths simultaneously (e.g., WiFi + Ethernet, or multiple WAN links). Requires Linux 5.6+ with `CONFIG_MPTCP=y`.
+
+```bash
+# Server — MPTCP is automatic, no flag needed
+xfr serve
+
+# Client
+xfr <host> --mptcp                    # MPTCP single stream
+xfr <host> --mptcp -P 4               # MPTCP with 4 parallel streams
+xfr <host> --mptcp --bidir            # MPTCP bidirectional
+xfr <host> --mptcp --congestion bbr   # MPTCP with BBR congestion control
+```
+
+MPTCP is transparent at the application layer — all TCP features work unchanged:
+- Single-port mode, multi-stream, bidirectional
+- TCP_INFO stats (RTT, retransmits, cwnd)
+- Congestion control, window size, nodelay
+- PSK authentication
+
+**Server auto-MPTCP**: The server always tries to create MPTCP listeners. MPTCP listeners accept both MPTCP and regular TCP clients transparently — the kernel handles the fallback. If the kernel doesn't support MPTCP, the server silently falls back to regular TCP. No `--mptcp` flag is needed on the server side.
+
+**Client `--mptcp`**: The client must explicitly opt in with `--mptcp` to request MPTCP connections. Both sides need MPTCP-capable sockets for actual multi-path behavior; otherwise the kernel falls back to regular TCP.
+
+**Platform**: Linux only. Non-Linux platforms receive a clear error message on the client. The server silently falls back to TCP on non-Linux. The kernel must have MPTCP enabled (`CONFIG_MPTCP=y`, default on most modern distros).
 
 ## Protocol
 
@@ -474,6 +501,7 @@ See `xfr --help` for complete CLI documentation.
 | `--ipv6` | `-6` | false | Force IPv6 only |
 | `--bind` | | none | Local address to bind (IP or IP:port) |
 | `--cport` | | none | Client source port for firewall traversal (UDP/QUIC only) |
+| `--mptcp` | | false | MPTCP mode (Multi-Path TCP, Linux 5.6+) |
 
 ### Server-Specific Flags
 

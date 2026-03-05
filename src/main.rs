@@ -270,6 +270,10 @@ struct Cli {
     /// Client source port for firewall traversal (UDP/QUIC only)
     #[arg(long, value_name = "PORT")]
     cport: Option<u16>,
+
+    /// MPTCP mode (Multi-Path TCP, Linux 5.6+)
+    #[arg(long, conflicts_with_all = ["udp", "quic"])]
+    mptcp: bool,
 }
 
 #[derive(Subcommand)]
@@ -737,6 +741,10 @@ async fn main() -> Result<()> {
                 Protocol::Tcp
             };
 
+            if cli.mptcp {
+                xfr::net::validate_mptcp().map_err(|e| anyhow::anyhow!("{}", e))?;
+            }
+
             // Apply config file defaults where CLI didn't override
             let duration = if cli.time != Duration::from_secs(10) {
                 cli.time
@@ -871,6 +879,7 @@ async fn main() -> Result<()> {
                 address_family: client_address_family,
                 bind_addr,
                 sequential_ports: protocol == Protocol::Udp && cport.is_some() && streams > 1,
+                mptcp: cli.mptcp,
             };
 
             // Determine output format
@@ -1028,7 +1037,7 @@ async fn run_client_plain(
     } else if opts.csv {
         output_csv(&result)
     } else {
-        output_plain(&result)
+        output_plain(&result, config.mptcp)
     };
 
     println!("{}", output_str);
@@ -1067,7 +1076,7 @@ async fn run_client_tui(
                 if print_json {
                     println!("{}", output_json(test_result));
                 } else {
-                    println!("{}", output_plain(test_result));
+                    println!("{}", output_plain(test_result, config.mptcp));
                 }
 
                 if let Some(path) = output {
