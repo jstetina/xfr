@@ -168,6 +168,7 @@ const BURST_SIZE: u64 = 100;
 ///
 /// If `target` is Some, uses send_to() for unconnected sockets (server reverse mode).
 /// If `target` is None, uses send() for connected sockets (client mode).
+#[allow(clippy::too_many_arguments)]
 pub async fn send_udp_paced(
     socket: Arc<UdpSocket>,
     target: Option<SocketAddr>,
@@ -176,12 +177,22 @@ pub async fn send_udp_paced(
     stats: Arc<StreamStats>,
     mut cancel: watch::Receiver<bool>,
     mut pause: watch::Receiver<bool>,
+    random_payload: bool,
 ) -> anyhow::Result<UdpSendStats> {
     let packet_size = UDP_PAYLOAD_SIZE;
 
     // Unlimited mode: no pacing, send as fast as possible
     if target_bitrate == 0 {
-        return send_udp_unlimited(socket, target, duration, stats, cancel, pause).await;
+        return send_udp_unlimited(
+            socket,
+            target,
+            duration,
+            stats,
+            cancel,
+            pause,
+            random_payload,
+        )
+        .await;
     }
 
     let bits_per_packet = (packet_size * 8) as u64;
@@ -212,6 +223,9 @@ pub async fn send_udp_paced(
     let is_infinite = duration == Duration::ZERO;
 
     let mut packet = vec![0u8; packet_size];
+    if random_payload {
+        rand::Rng::fill(&mut rand::rng(), &mut packet[UDP_HEADER_SIZE..]);
+    }
 
     loop {
         if *cancel.borrow() {
@@ -291,6 +305,7 @@ async fn send_udp_unlimited(
     stats: Arc<StreamStats>,
     mut cancel: watch::Receiver<bool>,
     mut pause: watch::Receiver<bool>,
+    random_payload: bool,
 ) -> anyhow::Result<UdpSendStats> {
     let packet_size = UDP_PAYLOAD_SIZE;
     let mut sequence: u64 = 0;
@@ -298,6 +313,9 @@ async fn send_udp_unlimited(
     let deadline = start + duration;
     let is_infinite = duration == Duration::ZERO;
     let mut packet = vec![0u8; packet_size];
+    if random_payload {
+        rand::Rng::fill(&mut rand::rng(), &mut packet[UDP_HEADER_SIZE..]);
+    }
 
     debug!("UDP unlimited mode: sending as fast as possible");
 

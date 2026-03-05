@@ -274,6 +274,10 @@ struct Cli {
     /// MPTCP mode (Multi-Path TCP, Linux 5.6+)
     #[arg(long, conflicts_with_all = ["udp", "quic"])]
     mptcp: bool,
+
+    /// Use random payload data instead of zeros (defeats WAN optimization/compression)
+    #[arg(long)]
+    random: bool,
 }
 
 #[derive(Subcommand)]
@@ -492,6 +496,28 @@ fn validate_bind_address(
         }
     }
     Ok(())
+}
+
+fn random_payload_notice(
+    protocol: Protocol,
+    direction: Direction,
+    random_enabled: bool,
+) -> Option<&'static str> {
+    if !random_enabled {
+        return None;
+    }
+    if protocol == Protocol::Quic {
+        return Some("--random is ignored with QUIC (payload is already encrypted)");
+    }
+    match direction {
+        Direction::Upload => None,
+        Direction::Download => Some(
+            "--random currently applies only to client-sent payloads; reverse mode sender is server",
+        ),
+        Direction::Bidir => Some(
+            "--random currently applies only to client->server direction in bidirectional mode",
+        ),
+    }
 }
 
 fn generate_completions(shell: &str) {
@@ -741,6 +767,10 @@ async fn main() -> Result<()> {
                 Protocol::Tcp
             };
 
+            if let Some(msg) = random_payload_notice(protocol, direction, cli.random) {
+                eprintln!("Warning: {msg}");
+            }
+
             if cli.mptcp {
                 xfr::net::validate_mptcp().map_err(|e| anyhow::anyhow!("{}", e))?;
             }
@@ -880,6 +910,7 @@ async fn main() -> Result<()> {
                 bind_addr,
                 sequential_ports: protocol == Protocol::Udp && cport.is_some() && streams > 1,
                 mptcp: cli.mptcp,
+                random_payload: cli.random,
             };
 
             // Determine output format
@@ -1708,5 +1739,34 @@ mod tests {
         // Invalid address should fail
         assert!(parse_bind_address("invalid").is_err());
         assert!(parse_bind_address("[invalid]").is_err());
+    }
+
+    #[test]
+    fn test_random_payload_notice() {
+        // Disabled: no notice
+        assert_eq!(
+            random_payload_notice(Protocol::Tcp, Direction::Upload, false),
+            None
+        );
+
+        // QUIC: always ignored
+        assert!(random_payload_notice(Protocol::Quic, Direction::Upload, true).is_some());
+        assert!(random_payload_notice(Protocol::Quic, Direction::Download, true).is_some());
+
+        // TCP/UDP upload: fully supported client-side
+        assert_eq!(
+            random_payload_notice(Protocol::Tcp, Direction::Upload, true),
+            None
+        );
+        assert_eq!(
+            random_payload_notice(Protocol::Udp, Direction::Upload, true),
+            None
+        );
+
+        // Reverse/bidir: partial support today
+        assert!(random_payload_notice(Protocol::Tcp, Direction::Download, true).is_some());
+        assert!(random_payload_notice(Protocol::Tcp, Direction::Bidir, true).is_some());
+        assert!(random_payload_notice(Protocol::Udp, Direction::Download, true).is_some());
+        assert!(random_payload_notice(Protocol::Udp, Direction::Bidir, true).is_some());
     }
 }

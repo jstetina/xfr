@@ -66,6 +66,7 @@ pub struct TcpConfig {
     pub nodelay: bool,
     pub window_size: Option<usize>,
     pub congestion: Option<String>,
+    pub random_payload: bool,
 }
 
 impl Default for TcpConfig {
@@ -75,6 +76,7 @@ impl Default for TcpConfig {
             nodelay: false,
             window_size: None,
             congestion: None,
+            random_payload: false,
         }
     }
 }
@@ -89,6 +91,7 @@ impl TcpConfig {
             nodelay: true,
             window_size: Some(HIGH_SPEED_BUFFER),
             congestion: None,
+            random_payload: false,
         }
     }
 
@@ -119,6 +122,7 @@ impl TcpConfig {
                 nodelay,
                 window_size,
                 congestion: None,
+                random_payload: false,
             }
         }
     }
@@ -345,7 +349,10 @@ pub async fn send_data(
         }
         _ => config.buffer_size,
     };
-    let buffer = vec![0u8; buf_size];
+    let mut buffer = vec![0u8; buf_size];
+    if config.random_payload {
+        rand::Rng::fill(&mut rand::rng(), buffer.as_mut_slice());
+    }
     let start = tokio::time::Instant::now();
     let deadline = start + duration;
     let is_infinite = duration == Duration::ZERO;
@@ -585,7 +592,10 @@ pub async fn send_data_half(
         }
         _ => config.buffer_size,
     };
-    let buffer = vec![0u8; buf_size];
+    let mut buffer = vec![0u8; buf_size];
+    if config.random_payload {
+        rand::Rng::fill(&mut rand::rng(), buffer.as_mut_slice());
+    }
     let start = tokio::time::Instant::now();
     let deadline = start + duration;
     let is_infinite = duration == Duration::ZERO;

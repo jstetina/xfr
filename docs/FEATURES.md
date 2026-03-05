@@ -14,6 +14,7 @@ xfr <host> -b 100M             # TCP at 100 Mbps
 xfr <host> --tcp-nodelay       # Disable Nagle's algorithm
 xfr <host> --window 4M         # Set TCP window size
 xfr <host> --congestion bbr    # Use BBR congestion control
+xfr <host> --random            # Random payload (defeat compression/dedup bias)
 ```
 
 TCP provides:
@@ -39,6 +40,7 @@ Unreliable datagram transfer for testing network capacity:
 xfr <host> -u                  # UDP mode
 xfr <host> -u -b 1G            # UDP at 1 Gbps
 xfr <host> -u -b 0             # UDP unlimited (flood test - use carefully)
+xfr <host> -u --random         # Random UDP payload bytes
 ```
 
 UDP provides:
@@ -48,6 +50,16 @@ UDP provides:
 - Out-of-order detection
 
 **Note**: UDP is not congestion-controlled. High bitrates can cause network congestion.
+
+### Payload Pattern (`--random`)
+
+By default, payload buffers are zero-filled. With `--random`, xfr fills send buffers with random bytes once at allocation time (not per write), which helps avoid inflated results from WAN optimizers, compression offload, and dedup hardware.
+
+Current scope:
+- Applies to client-sent TCP/UDP payloads (Upload mode).
+- In `--bidir`, applies to client->server direction only.
+- In `-R/--reverse`, sender is server, so `--random` is currently not applied.
+- Ignored for QUIC (payload is already encrypted).
 
 ### QUIC
 
@@ -505,6 +517,7 @@ See `xfr --help` for complete CLI documentation.
 | `--bind` | | none | Local address to bind (IP or IP:port) |
 | `--cport` | | none | Client source port for firewall traversal (UDP/QUIC only) |
 | `--mptcp` | | false | MPTCP mode (Multi-Path TCP, Linux 5.6+) |
+| `--random` | | false | Use random client payload bytes (TCP/UDP upload; ignored for QUIC, partial in reverse/bidir) |
 
 ### Server-Specific Flags
 

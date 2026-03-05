@@ -56,6 +56,7 @@ async fn test_tcp_single_stream() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -94,6 +95,7 @@ async fn test_tcp_multi_stream() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -125,6 +127,7 @@ async fn test_connection_refused() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -156,6 +159,7 @@ async fn test_tcp_download() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -192,6 +196,7 @@ async fn test_tcp_bidir() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -228,6 +233,7 @@ async fn test_udp_upload() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -265,6 +271,7 @@ async fn test_udp_download() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -299,6 +306,7 @@ async fn test_udp_bidir() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -335,6 +343,7 @@ async fn test_udp_multi_stream() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -376,6 +385,7 @@ async fn test_multi_client_concurrent() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let config2 = ClientConfig {
@@ -394,6 +404,7 @@ async fn test_multi_client_concurrent() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client1 = Client::new(config1);
@@ -478,6 +489,7 @@ async fn test_psk_auth_success() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -518,6 +530,7 @@ async fn test_psk_auth_failure() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -558,6 +571,7 @@ async fn test_psk_auth_missing_client_key() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -596,6 +610,7 @@ async fn test_acl_allow() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -631,6 +646,7 @@ async fn test_rate_limit() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client1 = Client::new(config1.clone());
@@ -656,6 +672,7 @@ async fn test_rate_limit() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client2 = Client::new(config2);
@@ -702,6 +719,7 @@ async fn test_quic_upload() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -739,6 +757,7 @@ async fn test_quic_download() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -775,6 +794,7 @@ async fn test_quic_multi_stream() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -815,6 +835,7 @@ async fn test_quic_bidir() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -852,6 +873,7 @@ async fn test_quic_with_psk() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -891,6 +913,7 @@ async fn test_acl_deny() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -945,6 +968,7 @@ async fn test_ipv6_localhost() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -986,6 +1010,7 @@ async fn test_tcp_infinite_duration_with_cancel() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1035,6 +1060,7 @@ async fn test_udp_infinite_duration_with_cancel() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1080,6 +1106,7 @@ async fn test_quic_infinite_duration_with_cancel() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1147,6 +1174,7 @@ async fn test_udp_ipv4_explicit() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1201,6 +1229,7 @@ async fn test_udp_ipv6_explicit() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1255,6 +1284,7 @@ async fn test_udp_cport_dualstack_ipv6_target() {
         bind_addr: Some(format!("0.0.0.0:{cport}").parse().unwrap()),
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1308,6 +1338,7 @@ async fn test_quic_cport_dualstack_ipv6_target() {
         bind_addr: Some(format!("0.0.0.0:{cport}").parse().unwrap()),
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1346,6 +1377,7 @@ async fn test_udp_invalid_sequential_ports_config_fails() {
         bind_addr: None,
         sequential_ports: true,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1391,6 +1423,7 @@ async fn test_udp_bitrate_underflow_regression() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1459,6 +1492,7 @@ async fn test_quic_ipv6() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1513,6 +1547,7 @@ async fn test_tcp_one_off_multi_stream() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1576,6 +1611,7 @@ async fn test_quic_one_off() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);
@@ -1618,6 +1654,7 @@ fn test_pause_not_ready_before_test_run() {
         bind_addr: None,
         sequential_ports: false,
         mptcp: false,
+        random_payload: false,
     };
 
     let client = Client::new(config);

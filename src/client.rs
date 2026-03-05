@@ -87,6 +87,8 @@ pub struct ClientConfig {
     pub sequential_ports: bool,
     /// Use MPTCP (Multi-Path TCP) instead of regular TCP
     pub mptcp: bool,
+    /// Use random payload data instead of zeros
+    pub random_payload: bool,
 }
 
 impl Default for ClientConfig {
@@ -107,6 +109,7 @@ impl Default for ClientConfig {
             bind_addr: None,
             sequential_ports: false,
             mptcp: false,
+            random_payload: false,
         }
     }
 }
@@ -653,6 +656,7 @@ impl Client {
                 self.config.bitrate,
             );
             config.congestion = self.config.tcp_congestion.clone();
+            config.random_payload = self.config.random_payload;
 
             handles.push(tokio::spawn(async move {
                 // In single-port mode, limit concurrent connect+DataHello handshakes
@@ -754,6 +758,7 @@ impl Client {
                                     nodelay: config.nodelay,
                                     window_size: config.window_size,
                                     congestion: config.congestion.clone(),
+                                    random_payload: config.random_payload,
                                 };
                                 let recv_config = config;
 
@@ -865,6 +870,7 @@ impl Client {
             let pause = pause.clone();
             let direction = self.config.direction;
             let duration = self.config.duration;
+            let random_payload = self.config.random_payload;
             let bind_addr = if self.config.sequential_ports {
                 // --cport with multi-stream: assign sequential ports (cport, cport+1, ...)
                 base_bind_addr.map(|mut addr| {
@@ -915,6 +921,7 @@ impl Client {
                             stream_stats,
                             cancel,
                             pause,
+                            random_payload,
                         )
                         .await
                         {
@@ -963,6 +970,7 @@ impl Client {
                                 send_stats,
                                 send_cancel,
                                 send_pause,
+                                random_payload,
                             )
                             .await
                             {

@@ -2135,6 +2135,7 @@ async fn spawn_tcp_handlers(
                         nodelay: config.nodelay,
                         window_size: config.window_size,
                         congestion: config.congestion.clone(),
+                        random_payload: false,
                     };
                     let recv_config = config;
 
@@ -2418,6 +2419,7 @@ async fn spawn_udp_handlers(
                                 stream_stats,
                                 cancel,
                                 pause,
+                                false,
                             )
                             .await;
                         }
@@ -2450,6 +2452,7 @@ async fn spawn_udp_handlers(
                                     send_stats,
                                     send_cancel,
                                     send_pause,
+                                    false,
                                 )
                                 .await;
                             });
