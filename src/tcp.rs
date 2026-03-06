@@ -212,6 +212,7 @@ fn set_tcp_congestion(_stream: &TcpStream, _algo: &str) -> std::io::Result<()> {
 /// The kernel's FQ scheduler uses EDT for precise per-packet timing,
 /// eliminating burst behavior inherent in userspace sleep/wake cycles.
 /// Returns true if kernel pacing was successfully set.
+#[cfg(target_os = "linux")]
 #[inline]
 fn pacing_rate_bytes_per_sec(bitrate_bps: u64) -> libc::c_ulong {
     if bitrate_bps == 0 {
@@ -791,6 +792,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn test_pacing_rate_bytes_per_sec_conversion() {
         assert_eq!(pacing_rate_bytes_per_sec(0), 0);
         assert_eq!(pacing_rate_bytes_per_sec(1), 1);
