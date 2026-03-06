@@ -275,9 +275,13 @@ struct Cli {
     #[arg(long, conflicts_with_all = ["udp", "quic"])]
     mptcp: bool,
 
-    /// Use random payload data instead of zeros (defeats WAN optimization/compression)
-    #[arg(long)]
+    /// Use random payload data (default for TCP/UDP client-sent traffic)
+    #[arg(long, conflicts_with = "zeros")]
     random: bool,
+
+    /// Use zero-filled payload data instead of random bytes
+    #[arg(long, conflicts_with = "random")]
+    zeros: bool,
 }
 
 #[derive(Subcommand)]
@@ -498,6 +502,11 @@ fn validate_bind_address(
     Ok(())
 }
 
+fn effective_random_payload(cli: &Cli) -> bool {
+    debug_assert!(!(cli.random && cli.zeros));
+    !cli.zeros
+}
+
 fn random_payload_notice(
     protocol: Protocol,
     direction: Direction,
@@ -507,15 +516,15 @@ fn random_payload_notice(
         return None;
     }
     if protocol == Protocol::Quic {
-        return Some("--random is ignored with QUIC (payload is already encrypted)");
+        return Some("random payloads are ignored with QUIC (payload is already encrypted)");
     }
     match direction {
         Direction::Upload => None,
         Direction::Download => Some(
-            "--random currently applies only to client-sent payloads; reverse mode sender is server",
+            "random payloads currently apply only to client-sent payloads; reverse mode sender is server",
         ),
         Direction::Bidir => Some(
-            "--random currently applies only to client->server direction in bidirectional mode",
+            "random payloads currently apply only to client->server direction in bidirectional mode",
         ),
     }
 }
@@ -744,7 +753,7 @@ async fn main() -> Result<()> {
 
         None => {
             // Client mode
-            let Some(host) = cli.host else {
+            let Some(ref host) = cli.host else {
                 eprintln!("Error: HOST argument required for client mode");
                 eprintln!("Usage: xfr <HOST> [OPTIONS]");
                 eprintln!("       xfr serve [OPTIONS]");
@@ -767,7 +776,9 @@ async fn main() -> Result<()> {
                 Protocol::Tcp
             };
 
-            if let Some(msg) = random_payload_notice(protocol, direction, cli.random) {
+            let random_payload = effective_random_payload(&cli);
+
+            if let Some(msg) = random_payload_notice(protocol, direction, random_payload) {
                 eprintln!("Warning: {msg}");
             }
 
@@ -910,7 +921,7 @@ async fn main() -> Result<()> {
                 bind_addr,
                 sequential_ports: protocol == Protocol::Udp && cport.is_some() && streams > 1,
                 mptcp: cli.mptcp,
-                random_payload: cli.random,
+                random_payload,
             };
 
             // Determine output format
@@ -1586,6 +1597,10 @@ mod tests {
         // --json and --csv should conflict
         let result = Cli::try_parse_from(["xfr", "host", "--json", "--csv"]);
         assert!(result.is_err());
+
+        // --random and --zeros should conflict
+        let result = Cli::try_parse_from(["xfr", "host", "--random", "--zeros"]);
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1607,6 +1622,20 @@ mod tests {
         // -P 129 should fail
         let result = Cli::try_parse_from(["xfr", "host", "-P", "129"]);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_cli_payload_defaults() {
+        use clap::Parser;
+
+        let cli = Cli::try_parse_from(["xfr", "host"]).unwrap();
+        assert!(effective_random_payload(&cli));
+
+        let cli = Cli::try_parse_from(["xfr", "host", "--random"]).unwrap();
+        assert!(effective_random_payload(&cli));
+
+        let cli = Cli::try_parse_from(["xfr", "host", "--zeros"]).unwrap();
+        assert!(!effective_random_payload(&cli));
     }
 
     #[test]
@@ -1750,7 +1779,10 @@ mod tests {
         );
 
         // QUIC: always ignored
-        assert!(random_payload_notice(Protocol::Quic, Direction::Upload, true).is_some());
+        assert_eq!(
+            random_payload_notice(Protocol::Quic, Direction::Upload, true),
+            Some("random payloads are ignored with QUIC (payload is already encrypted)")
+        );
         assert!(random_payload_notice(Protocol::Quic, Direction::Download, true).is_some());
 
         // TCP/UDP upload: fully supported client-side
@@ -1764,8 +1796,18 @@ mod tests {
         );
 
         // Reverse/bidir: partial support today
-        assert!(random_payload_notice(Protocol::Tcp, Direction::Download, true).is_some());
-        assert!(random_payload_notice(Protocol::Tcp, Direction::Bidir, true).is_some());
+        assert_eq!(
+            random_payload_notice(Protocol::Tcp, Direction::Download, true),
+            Some(
+                "random payloads currently apply only to client-sent payloads; reverse mode sender is server",
+            )
+        );
+        assert_eq!(
+            random_payload_notice(Protocol::Tcp, Direction::Bidir, true),
+            Some(
+                "random payloads currently apply only to client->server direction in bidirectional mode",
+            )
+        );
         assert!(random_payload_notice(Protocol::Udp, Direction::Download, true).is_some());
         assert!(random_payload_notice(Protocol::Udp, Direction::Bidir, true).is_some());
     }

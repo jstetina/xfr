@@ -413,6 +413,8 @@ See `examples/grafana-dashboard.json` for a sample Grafana dashboard.
 | `--bind` | | none | Local address to bind (e.g., 192.168.1.100) |
 | `--cport` | | none | Client source port for firewall traversal (UDP/QUIC) |
 | `--mptcp` | | false | MPTCP mode (client-only, Linux 5.6+; server auto-enables) |
+| `--random` | | true | Use random payload data (default for TCP/UDP client-sent traffic) |
+| `--zeros` | | false | Use zero-filled payload data instead of random bytes |
 | `--json` | | false | JSON output |
 | `--json-stream` | | false | JSON per interval |
 | `--csv` | | false | CSV output |
@@ -441,6 +443,8 @@ See `examples/grafana-dashboard.json` for a sample Grafana dashboard.
 | `--max-duration` | | none | Maximum test duration, server-side limit (server) |
 | `--tui` | | false | Enable live dashboard (server) |
 | `--one-off` | | false | Exit after one test (server, works with TCP and QUIC) |
+
+TCP and UDP tests use random client-sent payloads by default to avoid inflated results on WAN-optimized or compressing paths. Use `--zeros` when you explicitly want compressible traffic.
 
 ## Security Considerations
 

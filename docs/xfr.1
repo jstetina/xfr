@@ -104,6 +104,18 @@ Force IPv6 only
 .BI \-\-bind " ADDR"
 Local address to bind to (e.g., 192.168.1.100 or 192.168.1.100:0)
 .TP
+.BI \-\-cport " PORT"
+Client source port for firewall traversal (UDP/QUIC only)
+.TP
+.B \-\-mptcp
+Use MPTCP (Multi\-Path TCP, Linux 5.6+)
+.TP
+.B \-\-random
+Use random payload data (default for TCP/UDP client\-sent traffic)
+.TP
+.B \-\-zeros
+Use zero\-filled payload data instead of random bytes
+.TP
 .BI \-\-completions " SHELL"
 Generate shell completions: bash, zsh, fish, powershell, elvish
 .SH SERVER OPTIONS
@@ -224,6 +236,9 @@ QUIC encrypted test
 .TP
 .B xfr 192.168.1.1 \-\-json \-\-no\-tui
 JSON output for scripting
+.TP
+.B xfr 192.168.1.1 \-\-zeros
+Use zero\-filled payloads for compression/dedup testing
 .TP
 .B xfr serve
 Start server on default port 5201

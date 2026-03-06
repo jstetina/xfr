@@ -87,7 +87,7 @@ pub struct ClientConfig {
     pub sequential_ports: bool,
     /// Use MPTCP (Multi-Path TCP) instead of regular TCP
     pub mptcp: bool,
-    /// Use random payload data instead of zeros
+    /// Use random payload data for client-sent traffic
     pub random_payload: bool,
 }
 
@@ -109,7 +109,7 @@ impl Default for ClientConfig {
             bind_addr: None,
             sequential_ports: false,
             mptcp: false,
-            random_payload: false,
+            random_payload: true,
         }
     }
 }
