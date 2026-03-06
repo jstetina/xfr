@@ -34,6 +34,16 @@ This document tracks known limitations and edge cases that are documented but no
 
 ---
 
+### High Stream Counts Without Fair Queuing
+
+**Issue:** Very high stream counts (`64+`) over bandwidth-limited links with shallow non-fair queues can still drop enough handshake/data packets to kill some TCP streams.
+
+**Impact:** You may see zero-byte streams, retransmit spikes, or mid-test `Broken pipe` errors in synthetic setups that use bare `netem rate ... limit ...` without fair queuing.
+
+**Workaround:** Use fair queuing such as `fq_codel`, reduce stream count, or increase queue depth appropriately. This is primarily a queueing/test-harness limitation, not specific to xfr; most modern Linux distributions already default to `fq_codel`.
+
+---
+
 ### QUIC Client DualStack Binding
 
 **Issue:** QUIC client endpoint in DualStack mode binds to IPv4 (`0.0.0.0:0`) by default, which may not work when connecting to an IPv6-only server.

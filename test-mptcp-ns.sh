@@ -5,6 +5,8 @@
 # Creates a virtual network with 2 paths:
 #   Path 0: 20 Mbps, 10ms delay each way
 #   Path 1: 10 Mbps, 20ms delay each way
+# Transit links use netem shaping with fq_codel underneath to better match
+# the fair-queued defaults used by most modern Linux systems.
 # Expected aggregate with MPTCP: ~30 Mbps
 #
 # Usage:
@@ -153,17 +155,21 @@ setup()
 
 	ip -n "${NS}_net0" link set "cli" up
 	ip -n "${NS}_net0" addr add dev "cli" "10.0.10.1/24"
-	tc -n "${NS}_net0" qdisc add dev "cli" root netem rate 20mbit delay 10ms limit 100
+	tc -n "${NS}_net0" qdisc add dev "cli" root handle 1: netem rate 20mbit delay 10ms limit 100
+	tc -n "${NS}_net0" qdisc add dev "cli" parent 1:1 fq_codel
 	ip -n "${NS}_net0" link set "srv" up
 	ip -n "${NS}_net0" addr add dev "srv" "10.0.0.2/24"
-	tc -n "${NS}_net0" qdisc add dev "srv" root netem rate 20mbit delay 10ms limit 100
+	tc -n "${NS}_net0" qdisc add dev "srv" root handle 1: netem rate 20mbit delay 10ms limit 100
+	tc -n "${NS}_net0" qdisc add dev "srv" parent 1:1 fq_codel
 
 	ip -n "${NS}_net1" link set "cli" up
 	ip -n "${NS}_net1" addr add dev "cli" "10.0.11.1/24"
-	tc -n "${NS}_net1" qdisc add dev "cli" root netem rate 10mbit delay 20ms limit 100
+	tc -n "${NS}_net1" qdisc add dev "cli" root handle 1: netem rate 10mbit delay 20ms limit 100
+	tc -n "${NS}_net1" qdisc add dev "cli" parent 1:1 fq_codel
 	ip -n "${NS}_net1" link set "srv" up
 	ip -n "${NS}_net1" addr add dev "srv" "10.0.1.2/24"
-	tc -n "${NS}_net1" qdisc add dev "srv" root netem rate 10mbit delay 20ms limit 100
+	tc -n "${NS}_net1" qdisc add dev "srv" root handle 1: netem rate 10mbit delay 20ms limit 100
+	tc -n "${NS}_net1" qdisc add dev "srv" parent 1:1 fq_codel
 }
 
 # Assert that $1 > $2 (floating point comparison)
