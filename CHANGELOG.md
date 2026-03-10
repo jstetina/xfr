@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.9.3] - 2026-03-10
 
 ### Added
 - **Server `--bind` flag** (issue #38) — `xfr serve --bind <IP>` binds TCP, QUIC, and UDP data listeners to a specific address. Validates against `-4`/`-6` flags and rejects unspecified addresses (`::`, `0.0.0.0`). Requested by Windows users needing interface-specific binding.
@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **QUIC dual-stack on Windows** (issue #39) — QUIC server endpoint now creates its UDP socket via socket2 with explicit `IPV6_V6ONLY` handling instead of relying on Quinn's `Endpoint::server()`, which uses `std::net::UdpSocket::bind()` without dual-stack configuration. On Windows/macOS where `IPV6_V6ONLY` defaults to `true`, binding to `[::]` would only accept IPv6 connections.
+- **Server random payload on single-port TCP reverse** (issue #34) — the single-port TCP handler (DataHello path used by all modern clients) was missing `random_payload = true`, causing reverse-mode downloads to still send zeros. Legacy multi-port handler was correct but is dead code for current clients.
+
+### Security
+- **quinn-proto DoS fix** — updated quinn-proto 0.11.13 → 0.11.14 (RUSTSEC-2026-0037, severity 8.7)
 
 ## [0.9.2] - 2026-03-06
 
