@@ -129,6 +129,8 @@
 - [ ] **Suppress UDP/QUIC send errors on graceful shutdown** - UDP shows `Connection refused (os error 111)`, QUIC shows `sending stopped by peer: error 0` when server tears down sockets before client finishes sending; cosmetic but noisy
 - [ ] **Summary on early exit** (issue #35) - catch SIGINT/SIGTERM, trigger cancel path, and display test summary with accumulated stats instead of silently exiting. Server-side disconnect errors on client kill are a separate cleanup
 - [x] **Delta retransmits in plain-text interval output** (issue #36) - plain-text interval reports now show retransmit deltas instead of cumulative totals while the final summary remains cumulative. TUI stats remain cumulative by design, and server-reported per-stream interval deltas continue in JSON/CSV output
+- [ ] **`omit_secs` in config file** (issue #43) — add `omit_secs` to `[client]` config so `--omit` can be set as a default
+- [ ] **Group CLI help by client/server** (issue #43) — restructure `--help` output into client-only, server-only, and shared sections like iperf3
 
 ### Code Quality
 - [ ] **Test lifecycle guard** - wrap active_tests entries in a `Drop` guard so cleanup runs regardless of handler panic/error; covers orphaned state on control disconnect, semaphore permit leak, and QUIC handler cleanup. Consider DashMap to reduce lock contention at higher concurrency
@@ -243,7 +245,7 @@ Client behind strict firewall → which protocol?
 - [ ] Basic TCP/UDP testing (no TCP_INFO)
 - [ ] TUI compatibility with Windows Terminal
 - [ ] Pre-built binaries
-- [ ] Config path adjustment (`%APPDATA%\xfr`)
+- [x] Config path adjustment (`%APPDATA%\xfr`) — documented in README, FEATURES.md, and manpage
 
 *Rationale: Codebase already has fallbacks for Unix-specific features. Cross-compilation should work with minimal changes.*
 
