@@ -177,6 +177,8 @@
 - [ ] **Get server output** (`--get-server-output`) - return server's JSON result to client (iperf3 parity)
 - [ ] **DSCP/TOS marking** (`--dscp`) - set IP_TOS on sockets for QoS policy testing; single `setsockopt` call, same pattern as `--congestion`. iperf3 has `-S`
 - [ ] **TCP Fast Open** (`--fast-open`) - reduce handshake latency for short tests; `setsockopt(TCP_FASTOPEN)` on server, `MSG_FASTOPEN` on client connect
+- [ ] **CC algorithm A/B comparison** (`xfr cca-compare <host>`) - run back-to-back tests with different congestion control algorithms (BBR, CUBIC, Reno, etc.) and produce side-by-side comparison (throughput, retransmits, RTT). Leverages existing `--congestion` and `xfr diff`. BBR vs CUBIC is one of the most common network testing questions
+- [ ] **Server-side bandwidth caps** (`--max-bandwidth`) - per-test server-enforced bandwidth limit to prevent abuse of public servers. iperf3 issue #937 is highly requested. Distinct from `--rate-limit` (which limits concurrent tests per IP)
 
 ### Firewall Traversal Decision Tree
 
@@ -218,13 +220,15 @@ Client behind strict firewall → which protocol?
 
 ### Medium Effort (moderate effort, high impact)
 - [x] **Pause/resume** (`p` key) - real traffic pause via `Pause`/`Resume` protocol messages and a second `watch` channel to data loops (v0.7.0, issue #19)
-- [ ] **Repeat mode** (`--repeat N --interval 60s`) - run N tests with delays and output summary; replaces cron-based scripting for CI/monitoring
-- [ ] **Bufferbloat / latency-under-load** (`--latency-probe`) - run throughput flood + concurrent latency probe (ICMP/UDP) and grade the connection. Scope: single flag, simple A-F grade output, not a full latency monitoring suite
+- [ ] **Repeat mode** (`--repeat N --interval 60s`) - run N tests with delays and output summary; replaces cron-based scripting for CI/monitoring. Could extend to `xfr monitor` with local time-series storage (SQLite/JSON) and percentile tracking (p50/p95/p99)
+- [ ] **Responsiveness / bufferbloat scoring** (`xfr responsiveness`) - saturate the link (upload + download) while measuring latency every 200ms, report RPM (Roundtrips Per Minute) score and bufferbloat letter grade (A-F). Follows IETF `draft-ietf-ippm-responsiveness` methodology. No single-binary CLI tool does both throughput AND responsiveness scoring — Crusader, Flent, and Apple's `networkQuality` each require separate tools or are platform-specific. Highest differentiation opportunity
 - [ ] **Server UDP port range** (`--data-port-range`) - configurable ephemeral port range for server-side UDP data sockets (requested in issue #38 for strict firewall environments on Windows)
 - [ ] **UDP single-port mode** - multiplex all UDP streams through a single port, eliminating per-stream port allocation. Analogous to TCP's DataHello approach. Would make UDP fully firewall-friendly without `--cport`
 - [ ] **UDP GSO/GRO** - kernel-level packet batching for UDP; iperf3 added this Aug 2025, would break through the 2 Gbps UDP ceiling
 
 ### Larger Projects (high effort, high impact)
+- [ ] **Real-time traffic emulation** (`--profile voip|gaming|video`) - preset packet sizes and intervals to emulate real-time traffic: VoIP (64B/20ms bidirectional), gaming (100-300B/8-16ms), video call (1200B/33ms). Reports jitter, out-of-order, and MOS (Mean Opinion Score) estimate. Replaces IRTT for most use cases in a single binary
+- [ ] **Mesh / multi-node matrix testing** (`xfr mesh`) - given a list of xfr server addresses, run all-pairs throughput/latency tests and output a matrix (table, CSV, JSON). Useful for Kubernetes cluster validation, multi-region deployments, and SD-WAN path selection. No open-source CLI tool does this
 - [ ] **sendmmsg for UDP bursts** - batch multiple packets per syscall (Linux)
 - [ ] **CPU affinity options** (`--affinity`) - pin streams to specific cores, reduces page faults and context switches (rperf has this)
 - [ ] **Socket buffer auto-tuning** - optimal SO_SNDBUF/SO_RCVBUF for link speed
@@ -237,10 +241,17 @@ Client behind strict firewall → which protocol?
 - [ ] **Test profiles** - save/load named test configurations
 - [ ] **Side-by-side comparison mode** - compare baseline vs current in TUI
 - [ ] **Server health check** (`--health-check`) - simple HTTP endpoint for load balancer integration; tiny listener on separate port or same port responding to `GET /health`
+- [ ] **UDP out-of-order & duplicate counting** - report reordered and duplicate packets separately from lost packets. rperf has this; important for lossy WAN analysis
+- [ ] **QUIC-specific metrics** - report handshake time, 0-RTT resumption bytes, stream multiplexing overhead. Extends existing QUIC support with diagnostic detail
 
 ---
 
 ## Low Priority
+
+### Distribution & Visibility
+- [ ] **Homebrew core submission** - at 439+ stars, well past the 75-star threshold. Would remove the need for `lance0/tap`
+- [ ] **ESnet Fasterdata listing** - contact ESnet to add xfr to their [throughput tool comparison page](https://fasterdata.es.net/performance-testing/network-troubleshooting-tools/throughput-tool-comparision/). The reference page for network tools in the research/enterprise community
+- [ ] **winget / MSI packaging** - first-class Windows distribution. Microsoft [tells users not to use iperf3 on Windows](https://techcommunity.microsoft.com/blog/networkingblog/three-reasons-why-you-should-not-use-iperf3-on-windows/4117876) — opportunity to capture that audience
 
 ### Windows Native
 - [x] **QUIC dual-stack fix** (issue #39) — QUIC server endpoint now handles `IPV6_V6ONLY` explicitly via socket2, fixing IPv4 QUIC on Windows/macOS where the default is `true`
@@ -249,7 +260,7 @@ Client behind strict firewall → which protocol?
 - [ ] Pre-built binaries
 - [x] Config path adjustment (`%APPDATA%\xfr`) — documented in README, FEATURES.md, and manpage
 
-*Rationale: Codebase already has fallbacks for Unix-specific features. Cross-compilation should work with minimal changes.*
+*Rationale: Codebase already has fallbacks for Unix-specific features. Microsoft recommends against iperf3 on Windows, creating an opening for a cross-platform Rust tool.*
 
 ### TUI Code Refactoring
 - [ ] Split `ui.rs` into `render.rs` and `modals.rs`
