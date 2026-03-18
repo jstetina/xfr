@@ -378,6 +378,7 @@ no_tui = false
 theme = "default"            # or dracula, catppuccin, nord, matrix, etc.
 timestamp_format = "relative" # or "iso8601", "unix"
 address_family = "dual"      # "ipv4", "ipv6", or "dual"
+omit_secs = 0                # omit first N seconds (TCP ramp-up)
 psk = "my-secret-key"
 log_file = "~/.config/xfr/xfr.log"
 log_level = "info"
@@ -438,6 +439,7 @@ See `examples/grafana-dashboard.json` for a sample Grafana dashboard.
 | `--ipv6` | `-6` | false | Force IPv6 only |
 | `--bind` | | none | Local address to bind (e.g., 192.168.1.100) |
 | `--cport` | | none | Client source port for firewall traversal (UDP/QUIC/TCP data streams) |
+| `--dscp` | | none | DSCP/TOS marking for QoS testing (0-255 or name: EF, AF11, CS1, etc.) |
 | `--mptcp` | | false | MPTCP mode (client-only, Linux 5.6+; server auto-enables) |
 | `--random` | | true | Use random payload data for client-sent TCP/UDP traffic (default) |
 | `--zeros` | | false | Use zero-filled payload data (client-sent traffic only) |

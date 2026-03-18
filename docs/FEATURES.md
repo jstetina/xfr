@@ -288,6 +288,7 @@ no_tui = false
 theme = "default"
 timestamp_format = "relative"  # relative, iso8601, unix
 address_family = "dual"        # ipv4, ipv6, dual
+omit_secs = 0                  # omit first N seconds (TCP ramp-up)
 psk = "my-secret-key"
 log_file = "~/.config/xfr/xfr.log"
 log_level = "info"
