@@ -1154,6 +1154,8 @@ async fn run_client_plain(
                     progress.throughput_mbps,
                     progress.total_bytes,
                     retransmits,
+                    jitter_ms,
+                    lost,
                     rtt_us,
                 )
             };

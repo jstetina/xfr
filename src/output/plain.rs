@@ -94,12 +94,15 @@ pub fn output_plain(result: &TestResult, mptcp: bool) -> String {
     output
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn output_interval_plain(
     timestamp: &str,
     _elapsed_secs: f64,
     throughput_mbps: f64,
     bytes: u64,
     retransmits: Option<u64>,
+    jitter_ms: Option<f64>,
+    lost: Option<u64>,
     rtt_us: Option<u32>,
 ) -> String {
     let mut output = format!(
@@ -111,6 +114,14 @@ pub fn output_interval_plain(
 
     if let Some(rtx) = retransmits {
         output.push_str(&format!("  rtx: {}", rtx));
+    }
+
+    if let Some(jitter) = jitter_ms {
+        output.push_str(&format!("  jitter: {:.2}ms", jitter));
+    }
+
+    if let Some(l) = lost {
+        output.push_str(&format!("  lost: {}", l));
     }
 
     if let Some(rtt) = rtt_us {
