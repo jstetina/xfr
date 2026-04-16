@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-04-16
+
+### Added
+- **Early exit summary** (issue #35) — Ctrl+C now displays a test summary with accumulated stats instead of silently exiting. Works in both plain text and TUI modes. Double Ctrl+C force-exits immediately.
+- **DSCP server-side propagation** — `--dscp` flag is now sent to the server and applied to server-side TCP/UDP sockets for download and bidirectional tests. Previously only client-side sockets were marked.
+- **Non-Unix `--dscp` warning** — platforms without socket TOS support now show a visible warning before the test starts, instead of silently no-oping.
+
+### Fixed
+- **Cancel flow waits for server result** — client `Cancelled` handler now waits for the server's `Result` message instead of immediately erroring, providing accurate final stats after cancel.
+- **Server result ordering** — server sends `Result` before slow post-processing (push gateway, metrics hooks), preventing false cancel timeouts.
+- **Rust 1.95 clippy compatibility** — fixed `manual_checked_ops` and `collapsible_match_arms` lints.
+
+### Changed
+- Bump `softprops/action-gh-release` from 2 to 3 in CI release workflow.
+
 ## [0.9.6] - 2026-03-18
 
 ### Added
