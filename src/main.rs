@@ -1109,8 +1109,10 @@ async fn run_client_plain(
 
         while let Some(progress) = rx.recv().await {
             // Accumulate cumulative totals for fallback summary
-            cumulative_bytes_writer.fetch_add(progress.total_bytes, std::sync::atomic::Ordering::Relaxed);
-            cumulative_elapsed_writer.store(progress.elapsed_ms, std::sync::atomic::Ordering::Relaxed);
+            cumulative_bytes_writer
+                .fetch_add(progress.total_bytes, std::sync::atomic::Ordering::Relaxed);
+            cumulative_elapsed_writer
+                .store(progress.elapsed_ms, std::sync::atomic::Ordering::Relaxed);
 
             let elapsed_secs = progress.elapsed_ms as f64 / 1000.0;
             let retransmits = interval_retransmits(&progress, &mut last_retransmits);
@@ -1261,9 +1263,7 @@ async fn run_client_plain(
     println!("{}", output_str);
 
     // Don't save incomplete fallback results to file — only save real server results
-    if !interrupted
-        && let Some(path) = output
-    {
+    if !interrupted && let Some(path) = output {
         xfr::output::json::save_json(&result, &path)?;
         info!("Results saved to {}", path.display());
     }
