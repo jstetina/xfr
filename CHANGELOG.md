@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+- **Fast, accurate TCP teardown** (issue #54) — replaced the blocking `shutdown()` drain on the send path with `SO_LINGER=0` on Linux, so cancel and natural end-of-test no longer wait for bufferbloated send buffers to ACK through rate-limited paths. Fixes the "Timed out waiting 2s for N data streams to stop" warning matttbe reported with `-P 4 --mptcp -t 1sec`.
+- **Sender-side byte-count accuracy** — `stats.bytes_sent` is now clamped to `tcpi_bytes_acked` before abortive close, removing a quiet ~5-10% overcount where the send-buffer tail discarded by RST was being reported as transferred. Download and bidir tests are the primary beneficiaries.
+- **macOS preserves graceful shutdown** — non-Linux platforms lack `tcpi_bytes_acked`, so the Linux abortive-close path is cfg-gated; other platforms still use `shutdown()` for accurate accounting.
+
 ## [0.9.7] - 2026-04-16
 
 ### Added

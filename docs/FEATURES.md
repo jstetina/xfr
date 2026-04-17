@@ -22,7 +22,7 @@ TCP provides:
 - Bitrate pacing (`-b`) — on Linux, uses kernel `SO_MAX_PACING_RATE` with the FQ scheduler for precise per-packet timing; falls back to userspace byte-budget sleep pacing on other platforms or MPTCP sockets. Note: `-b` sets a global bitrate shared across all parallel streams (unlike iperf3 where `-b` is per-stream)
 - Selectable congestion control (`--congestion cubic`, `--congestion bbr`, `--congestion reno`)
 - TCP_INFO statistics (RTT, retransmits, cwnd) — polled live per interval, not just at test end
-- High stream-count teardown resilience — client now stops local data loops at local test end, scales teardown wait time with stream count, and TCP receivers do a short cancel-time drain before close to reduce post-test BrokenPipe/ConnectionReset cascades
+- High stream-count teardown resilience — client stops local data loops at local test end and scales teardown wait time with stream count. TCP receivers briefly drain after cancel to cover cross-peer cancel latency. On Linux, TCP senders use `SO_LINGER=0` (abortive close) at end-of-test and clamp `bytes_sent` to `tcpi_bytes_acked` so that bufferbloat-discarded tail bytes are not reported as sent; macOS falls back to graceful `shutdown()` since it lacks the `bytes_acked` counter needed to correct for overcount
 
 #### Single-Port TCP (Default)
 
@@ -181,6 +181,10 @@ xfr <host> -u -t 0 -b 100M     # Continuous UDP at 100 Mbps
 ```
 
 The TUI shows elapsed time as `Xs/∞`. Press `q` to stop.
+
+### Early Exit Summary
+
+Ctrl+C during any test (infinite or finite) triggers a graceful cancel and displays the full test summary with whatever stats have accumulated — rather than silently killing the process. Works in both plain text and TUI modes. A second Ctrl+C force-exits immediately (exit code 130). If the server is unreachable, a partial summary is printed from the client's cumulative counters instead of saving a synthetic result to `--output`.
 
 Servers can cap infinite requests with `--max-duration`:
 

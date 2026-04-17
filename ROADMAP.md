@@ -127,7 +127,7 @@
 ### Polish
 - [x] **Suppress TCP send errors on graceful shutdown** - TCP `Connection reset by peer` / `Broken pipe` / `Connection aborted` at teardown now suppressed via targeted grace window (issue #25)
 - [ ] **Suppress UDP/QUIC send errors on graceful shutdown** - UDP shows `Connection refused (os error 111)`, QUIC shows `sending stopped by peer: error 0` when server tears down sockets before client finishes sending; cosmetic but noisy
-- [ ] **Summary on early exit** (issue #35) - catch SIGINT/SIGTERM, trigger cancel path, and display test summary with accumulated stats instead of silently exiting. Server-side disconnect errors on client kill are a separate cleanup
+- [x] **Summary on early exit** (issue #35) — Ctrl+C now triggers the cancel path and displays the test summary with accumulated stats. Plain mode uses `tokio::signal::ctrl_c`; TUI treats Ctrl+C as a key event in raw mode. Double Ctrl+C force-exits (exit code 130). Fallback summary from cumulative counters when server is unreachable
 - [x] **Delta retransmits in plain-text interval output** (issue #36) - plain-text interval reports now show retransmit deltas instead of cumulative totals while the final summary remains cumulative. TUI stats remain cumulative by design, and server-reported per-stream interval deltas continue in JSON/CSV output
 - [x] **`omit_secs` in config file** (issue #43) — `[client] omit_secs` in config.toml sets default `--omit` value
 - [ ] **Group CLI help by client/server** (issue #43) — restructure `--help` output into client-only, server-only, and shared sections like iperf3

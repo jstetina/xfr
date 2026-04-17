@@ -108,7 +108,7 @@ Local address to bind to (e.g., 192.168.1.100 or ::1)
 Client source port for firewall traversal (UDP/QUIC/TCP data streams)
 .TP
 .BI \-\-dscp " VALUE"
-Set DSCP/TOS marking on sockets for QoS policy testing. Accepts numeric values (0\-255) or standard DSCP names: EF, AF11\-AF43, CS0\-CS7, VA.
+Set DSCP/TOS marking on sockets for QoS policy testing. Accepts numeric values (0\-255) or standard DSCP names: EF, AF11\-AF43, CS0\-CS7, VA. Applied to both client-side and server-side TCP/UDP sockets (the value is propagated in the TestStart message) so download and bidirectional tests mark traffic in both directions. QUIC manages its own socket and ignores this flag; non-Unix platforms warn before the test starts.
 .TP
 .B \-\-mptcp
 Use MPTCP (Multi\-Path TCP, Linux 5.6+)
@@ -268,6 +268,10 @@ Compare results, fail if throughput drops more than 5%
 .TP
 .B xfr discover
 Find xfr servers on the local network via mDNS
+.SH SIGNALS
+.TP
+.B SIGINT (Ctrl+C)
+Gracefully cancels the running test: signals the server over the control channel, waits briefly for the final result, then displays the accumulated test summary. Works in both plain text and TUI modes. A second Ctrl+C during the cancel window force-exits immediately.
 .SH EXIT STATUS
 .TP
 .B 0
@@ -281,6 +285,9 @@ Invalid arguments
 .TP
 .B 3
 Server rejected test (auth, rate limit, ACL)
+.TP
+.B 130
+Test was interrupted by SIGINT before server could report a full result (partial summary printed if any data was collected)
 .SH FILES
 .TP
 .I ~/.config/xfr/config.toml
