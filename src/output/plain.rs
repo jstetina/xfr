@@ -17,14 +17,38 @@ pub fn output_plain(result: &TestResult, mptcp: bool) -> String {
         "  Duration:    {:.2}s\n",
         result.duration_ms as f64 / 1000.0
     ));
-    output.push_str(&format!(
-        "  Transfer:    {}\n",
-        bytes_to_human(result.bytes_total)
-    ));
-    output.push_str(&format!(
-        "  Throughput:  {}\n",
-        mbps_to_human(result.throughput_mbps)
-    ));
+
+    // Bidirectional tests: show per-direction bytes/throughput alongside the total.
+    // Unidirectional tests report only the combined number (which equals the
+    // single-direction throughput anyway).
+    if let (Some(sent), Some(recv), Some(ts_send), Some(ts_recv)) = (
+        result.bytes_sent,
+        result.bytes_received,
+        result.throughput_send_mbps,
+        result.throughput_recv_mbps,
+    ) {
+        output.push_str(&format!(
+            "  Transfer:    Send: {}    Recv: {}    (Total: {})\n",
+            bytes_to_human(sent),
+            bytes_to_human(recv),
+            bytes_to_human(result.bytes_total)
+        ));
+        output.push_str(&format!(
+            "  Throughput:  Send: {}  Recv: {}  (Total: {})\n",
+            mbps_to_human(ts_send),
+            mbps_to_human(ts_recv),
+            mbps_to_human(result.throughput_mbps)
+        ));
+    } else {
+        output.push_str(&format!(
+            "  Transfer:    {}\n",
+            bytes_to_human(result.bytes_total)
+        ));
+        output.push_str(&format!(
+            "  Throughput:  {}\n",
+            mbps_to_human(result.throughput_mbps)
+        ));
+    }
     output.push('\n');
 
     if let Some(ref tcp_info) = result.tcp_info {
@@ -158,6 +182,10 @@ mod tests {
                 bytes_acked: None,
             }),
             udp_stats: None,
+            bytes_sent: None,
+            bytes_received: None,
+            throughput_send_mbps: None,
+            throughput_recv_mbps: None,
         }
     }
 
@@ -172,6 +200,34 @@ mod tests {
     fn test_output_plain_sender_tcp_label_mptcp() {
         let output = output_plain(&make_result_with_tcp_info(), true);
         assert!(output.contains("Sender TCP Info (initial subflow):\n"));
+    }
+
+    #[test]
+    fn test_output_plain_bidir_shows_split() {
+        // Bidirectional result populates the split fields — output should render
+        // Send/Recv/Total lines so asymmetric throughput is visible.
+        let mut result = make_result_with_tcp_info();
+        result.bytes_sent = Some(5_000_000_000);
+        result.bytes_received = Some(7_000_000_000);
+        result.throughput_send_mbps = Some(40_000.0);
+        result.throughput_recv_mbps = Some(56_000.0);
+        result.bytes_total = 12_000_000_000;
+        result.throughput_mbps = 96_000.0;
+
+        let output = output_plain(&result, false);
+        assert!(output.contains("Send:"), "expected split 'Send:' line");
+        assert!(output.contains("Recv:"), "expected split 'Recv:' line");
+        assert!(output.contains("(Total:"), "expected combined total");
+    }
+
+    #[test]
+    fn test_output_plain_unidir_no_split() {
+        // Unidirectional result leaves Options None — output stays single-line.
+        let output = output_plain(&make_result_with_tcp_info(), false);
+        assert!(
+            !output.contains("Send:") && !output.contains("Recv:"),
+            "unidir output must not show split lines"
+        );
     }
 
     #[test]

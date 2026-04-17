@@ -1295,6 +1295,10 @@ fn build_fallback_result(cumulative_bytes: u64, elapsed_ms: u64) -> xfr::protoco
         streams: vec![],
         tcp_info: None,
         udp_stats: None,
+        bytes_sent: None,
+        bytes_received: None,
+        throughput_send_mbps: None,
+        throughput_recv_mbps: None,
     }
 }
 
@@ -2097,6 +2101,10 @@ mod tests {
             rtt_us: None,
             cwnd: None,
             total_retransmits,
+            bytes_sent: None,
+            bytes_received: None,
+            throughput_send_mbps: None,
+            throughput_recv_mbps: None,
         }
     }
 

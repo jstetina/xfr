@@ -1339,6 +1339,42 @@ async fn handle_test_request(
     }
 }
 
+/// Compute per-direction byte/throughput totals (from the CLIENT's perspective)
+/// when the test is bidirectional. For unidirectional tests returns all None —
+/// the existing `bytes_total` and `throughput_mbps` fields already carry the
+/// single-direction number.
+///
+/// Direction convention: `TestResult.bytes_sent` means "bytes the *client* sent"
+/// (its upload direction). Server-local counters are reversed from that view
+/// — what the server sent went to the client (the client's downloads), and
+/// what the server received came from the client (the client's uploads). So
+/// we flip when emitting.
+fn directional_totals(
+    direction: Direction,
+    stats: &TestStats,
+    duration_ms: u64,
+) -> (Option<u64>, Option<u64>, Option<f64>, Option<f64>) {
+    if direction != Direction::Bidir {
+        return (None, None, None, None);
+    }
+    // Swap: server-sent == client-received, server-received == client-sent.
+    let client_bytes_sent = stats.total_bytes_received();
+    let client_bytes_received = stats.total_bytes_sent();
+    let mbps = |bytes: u64| {
+        if duration_ms == 0 {
+            0.0
+        } else {
+            (bytes as f64 * 8.0) / (duration_ms as f64 / 1000.0) / 1_000_000.0
+        }
+    };
+    (
+        Some(client_bytes_sent),
+        Some(client_bytes_received),
+        Some(mbps(client_bytes_sent)),
+        Some(mbps(client_bytes_received)),
+    )
+}
+
 /// Run a QUIC bandwidth test
 #[allow(clippy::too_many_arguments)]
 async fn run_quic_test(
@@ -1500,7 +1536,7 @@ async fn run_quic_test(
                     .zip(intervals.iter())
                     .map(|(s, i)| s.to_interval(i))
                     .collect();
-                let aggregate = stats.to_aggregate(&intervals);
+                let aggregate = stats.to_aggregate_with_direction(&intervals, direction == Direction::Bidir);
 
                 let interval_msg = ControlMessage::Interval {
                     id: id.to_string(),
@@ -1596,6 +1632,10 @@ async fn run_quic_test(
         .map(|s| s.to_result(duration_ms))
         .collect();
 
+    // Bidir: split up/down reporting for asymmetric links (issue #56).
+    let (bytes_sent, bytes_received, throughput_send_mbps, throughput_recv_mbps) =
+        directional_totals(direction, &stats, duration_ms);
+
     let result = ControlMessage::Result(TestResult {
         id: id.to_string(),
         bytes_total,
@@ -1604,6 +1644,10 @@ async fn run_quic_test(
         streams: stream_results,
         tcp_info: None,
         udp_stats: None,
+        bytes_sent,
+        bytes_received,
+        throughput_send_mbps,
+        throughput_recv_mbps,
     });
 
     ctrl_send
@@ -1862,7 +1906,7 @@ async fn run_test(
                     .zip(intervals.iter())
                     .map(|(s, i)| s.to_interval(i))
                     .collect();
-                let aggregate = stats.to_aggregate(&intervals);
+                let aggregate = stats.to_aggregate_with_direction(&intervals, direction == Direction::Bidir);
 
                 let interval_msg = ControlMessage::Interval {
                     id: id.to_string(),
@@ -1984,6 +2028,11 @@ async fn run_test(
         .map(|s| s.to_result(duration_ms))
         .collect();
 
+    // For bidir tests, expose per-direction totals so clients can distinguish
+    // upload from download throughput on asymmetric links (issue #56).
+    let (bytes_sent, bytes_received, throughput_send_mbps, throughput_recv_mbps) =
+        directional_totals(direction, &stats, duration_ms);
+
     let result = ControlMessage::Result(TestResult {
         id: id.to_string(),
         bytes_total,
@@ -1992,6 +2041,10 @@ async fn run_test(
         streams: stream_results,
         tcp_info: stats.get_tcp_info(),
         udp_stats: stats.aggregate_udp_stats(),
+        bytes_sent,
+        bytes_received,
+        throughput_send_mbps,
+        throughput_recv_mbps,
     });
 
     // Send result FIRST so the client isn't blocked by slow post-processing
