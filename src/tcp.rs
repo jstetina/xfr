@@ -18,6 +18,11 @@ use crate::tcp_info::get_tcp_info;
 const DEFAULT_BUFFER_SIZE: usize = 128 * 1024; // 128 KB
 const HIGH_SPEED_BUFFER: usize = 4 * 1024 * 1024; // 4 MB for 10G+
 const SEND_TEARDOWN_GRACE: Duration = Duration::from_millis(250);
+// Post-cancel read window: covers the race where our receive side signals
+// cancel and drops the socket before the peer's own cancel_tx has fired
+// (i.e., the Cancel control message hasn't yet been processed by the peer's
+// data loop). 200ms handles moderate WAN RTTs; same-host is sub-ms. Drained
+// bytes aren't counted in stats, so no accuracy impact on throughput.
 const RECEIVE_CANCEL_DRAIN_GRACE: Duration = Duration::from_millis(200);
 
 #[inline]
@@ -30,8 +35,9 @@ fn is_peer_closed_error(err: &io::Error) -> bool {
     )
 }
 
-/// Drain readable bytes briefly after cancel to reduce RST-on-close risk.
-/// Closing a socket with unread data can trigger a reset on the peer under load.
+/// Drain readable bytes briefly after cancel to give the peer's own cancel
+/// signal time to propagate before we drop the socket (which would RST).
+/// Drained bytes are not added to stats — this is purely for teardown hygiene.
 async fn drain_after_cancel<R: AsyncRead + Unpin>(reader: &mut R, stream_id: u8) {
     let mut buffer = [0u8; 16 * 1024];
     let deadline = tokio::time::Instant::now() + RECEIVE_CANCEL_DRAIN_GRACE;
@@ -48,7 +54,7 @@ async fn drain_after_cancel<R: AsyncRead + Unpin>(reader: &mut R, stream_id: u8)
             Ok(Err(e)) if e.kind() == io::ErrorKind::WouldBlock => continue,
             Ok(Err(e)) if is_peer_closed_error(&e) => break,
             Ok(Err(_)) => break,
-            Err(_) => break, // grace window elapsed while waiting
+            Err(_) => break, // grace window elapsed
         }
     }
 
@@ -57,6 +63,20 @@ async fn drain_after_cancel<R: AsyncRead + Unpin>(reader: &mut R, stream_id: u8)
             "Stream {} drained {} bytes after cancel before close",
             stream_id, drained
         );
+    }
+}
+
+/// Clamp `stats.bytes_sent` to `bytes_acked` before an abortive close. On Linux
+/// with SO_LINGER=0, unACK'd send-buffer data is discarded by RST; reporting it
+/// as "sent" would overcount. Called at every stream-return site in send paths.
+fn clamp_bytes_sent_to_acked(stats: &StreamStats, info: &crate::protocol::TcpInfoSnapshot) {
+    if let Some(acked) = info.bytes_acked {
+        let sent = stats.bytes_sent.load(std::sync::atomic::Ordering::Relaxed);
+        if acked < sent {
+            stats
+                .bytes_sent
+                .store(acked, std::sync::atomic::Ordering::Relaxed);
+        }
     }
 }
 
@@ -326,6 +346,12 @@ pub async fn send_data(
     mut pause: watch::Receiver<bool>,
 ) -> anyhow::Result<Option<crate::protocol::TcpInfoSnapshot>> {
     configure_stream(&stream, &config)?;
+    // Force abortive close on Linux only, where `tcpi_bytes_acked` lets us clamp
+    // the overcount of discarded send-buffer bytes. On platforms without that
+    // counter (macOS, fallback), graceful shutdown is used at end of loop to
+    // preserve accuracy. See issue #54.
+    #[cfg(target_os = "linux")]
+    let _ = socket2::SockRef::from(&stream).set_linger(Some(Duration::ZERO));
 
     let kernel_pacing = match bitrate {
         Some(bps) if bps > 0 => {
@@ -436,6 +462,11 @@ pub async fn send_data(
                     );
                 }
                 error!("Send error on stream {}: {}", stats.stream_id, e);
+                // Clamp bytes_sent before the RST-on-drop discards unACK'd data,
+                // preserving the accuracy invariant even on the error path.
+                if let Some(info) = get_stream_tcp_info(&stream) {
+                    clamp_bytes_sent_to_acked(&stats, &info);
+                }
                 return Err(e.into());
             }
         }
@@ -445,8 +476,13 @@ pub async fn send_data(
     let tcp_info = get_stream_tcp_info(&stream);
     if let Some(ref info) = tcp_info {
         stats.add_retransmits(info.retransmits);
+        clamp_bytes_sent_to_acked(&stats, info);
     }
 
+    // On Linux, SO_LINGER=0 was set earlier; drop alone triggers RST (skipping drain).
+    // On other platforms, call shutdown() for graceful FIN — slower but preserves
+    // accounting accuracy since we don't have bytes_acked to clamp overcount.
+    #[cfg(not(target_os = "linux"))]
     if let Err(e) = stream.shutdown().await {
         if *cancel.borrow() || is_peer_closed_error(&e) {
             debug!(
@@ -460,6 +496,7 @@ pub async fn send_data(
             );
         }
     }
+
     debug!(
         "Stream {} send complete: {} bytes",
         stats.stream_id,
@@ -560,8 +597,11 @@ pub fn get_stream_tcp_info(stream: &TcpStream) -> Option<crate::protocol::TcpInf
     get_tcp_info(stream).ok()
 }
 
-/// Send data on a split socket write half (for bidir mode)
-/// Returns the write half for reuniting to get TCP_INFO
+/// Send data on a split socket write half (for bidir mode).
+/// Returns the write half for reuniting, plus the sender-side TCP_INFO snapshot
+/// captured at clamp time — caller should prefer this over re-reading TCP_INFO
+/// post-reunite, since a second read would see a later (larger) `bytes_acked`
+/// that could exceed the clamped `bytes_sent`.
 pub async fn send_data_half(
     mut write_half: OwnedWriteHalf,
     stats: Arc<StreamStats>,
@@ -570,7 +610,11 @@ pub async fn send_data_half(
     mut cancel: watch::Receiver<bool>,
     bitrate: Option<u64>,
     mut pause: watch::Receiver<bool>,
-) -> anyhow::Result<OwnedWriteHalf> {
+) -> anyhow::Result<(OwnedWriteHalf, Option<crate::protocol::TcpInfoSnapshot>)> {
+    // Linux only: force abortive close. See send_data() for rationale.
+    #[cfg(target_os = "linux")]
+    let _ = socket2::SockRef::from(write_half.as_ref()).set_linger(Some(Duration::ZERO));
+
     let kernel_pacing = match bitrate {
         Some(bps) if bps > 0 => {
             let set = try_set_pacing_rate(write_half.as_ref(), bps);
@@ -675,12 +719,28 @@ pub async fn send_data_half(
                     );
                 }
                 error!("Send error on stream {}: {}", stats.stream_id, e);
+                // Clamp before RST-on-drop discards unACK'd data.
+                if let Ok(info) = get_tcp_info(write_half.as_ref()) {
+                    clamp_bytes_sent_to_acked(&stats, &info);
+                }
                 return Err(e.into());
             }
         }
     }
 
+    // Clamp bytes_sent to bytes_acked before abortive close (see send_data for rationale).
+    // Capture the snapshot so the caller can store it directly — a second post-reunite
+    // read would see a later, larger bytes_acked that could exceed the clamped bytes_sent.
+    let tcp_info = get_tcp_info(write_half.as_ref()).ok();
+    if let Some(ref info) = tcp_info {
+        clamp_bytes_sent_to_acked(&stats, info);
+    }
+
+    // On Linux, SO_LINGER=0 was set earlier; drop alone triggers RST.
+    // On other platforms, do graceful shutdown to preserve accounting accuracy.
+    #[cfg(not(target_os = "linux"))]
     let _ = write_half.shutdown().await;
+
     debug!(
         "Stream {} send complete: {} bytes",
         stats.stream_id,
@@ -693,7 +753,7 @@ pub async fn send_data_half(
         );
     }
 
-    Ok(write_half)
+    Ok((write_half, tcp_info))
 }
 
 /// Receive data on a split socket read half (for bidir mode)
@@ -785,6 +845,66 @@ mod tests {
     }
 
     #[test]
+    fn test_clamp_bytes_sent_to_acked_reduces_overcount() {
+        // Sender had written 1000 bytes but peer only ACK'd 800.
+        // Clamp should bring bytes_sent down to 800 (what actually landed).
+        let stats = StreamStats::new(0);
+        stats.add_bytes_sent(1000);
+        let info = crate::protocol::TcpInfoSnapshot {
+            retransmits: 0,
+            rtt_us: 1000,
+            rtt_var_us: 100,
+            cwnd: 10,
+            bytes_acked: Some(800),
+        };
+        clamp_bytes_sent_to_acked(&stats, &info);
+        assert_eq!(
+            stats.bytes_sent.load(std::sync::atomic::Ordering::Relaxed),
+            800
+        );
+    }
+
+    #[test]
+    fn test_clamp_bytes_sent_to_acked_no_change_when_acked_exceeds_sent() {
+        // bytes_acked > bytes_sent shouldn't happen (would be a kernel bug), but
+        // if it does, we must not inflate the counter beyond what was actually sent.
+        let stats = StreamStats::new(0);
+        stats.add_bytes_sent(500);
+        let info = crate::protocol::TcpInfoSnapshot {
+            retransmits: 0,
+            rtt_us: 1000,
+            rtt_var_us: 100,
+            cwnd: 10,
+            bytes_acked: Some(999),
+        };
+        clamp_bytes_sent_to_acked(&stats, &info);
+        assert_eq!(
+            stats.bytes_sent.load(std::sync::atomic::Ordering::Relaxed),
+            500
+        );
+    }
+
+    #[test]
+    fn test_clamp_bytes_sent_to_acked_none_is_noop() {
+        // On platforms without bytes_acked support (macOS, old Linux kernels),
+        // the clamp must be a no-op — we can't clamp to an unknown value.
+        let stats = StreamStats::new(0);
+        stats.add_bytes_sent(1000);
+        let info = crate::protocol::TcpInfoSnapshot {
+            retransmits: 0,
+            rtt_us: 1000,
+            rtt_var_us: 100,
+            cwnd: 10,
+            bytes_acked: None,
+        };
+        clamp_bytes_sent_to_acked(&stats, &info);
+        assert_eq!(
+            stats.bytes_sent.load(std::sync::atomic::Ordering::Relaxed),
+            1000
+        );
+    }
+
+    #[test]
     #[cfg(target_os = "linux")]
     fn test_validate_congestion_cubic() {
         // cubic is available on all Linux kernels
@@ -805,6 +925,9 @@ mod tests {
 
         // On 32-bit where c_ulong < u64, verify explicit clamp behavior.
         if libc::c_ulong::BITS < 64 {
+            // On 64-bit, c_ulong::MAX == u64::MAX so try_from is trivially ok;
+            // on 32-bit the cast widens. Clippy flags the 64-bit case; allow it.
+            #[allow(clippy::useless_conversion)]
             let max = u64::try_from(libc::c_ulong::MAX).unwrap_or(u64::MAX);
             let overflow_bytes = max.saturating_add(1);
             let bitrate = overflow_bytes.saturating_mul(8);

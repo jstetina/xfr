@@ -52,6 +52,12 @@ mod linux {
         pub tcpi_rcv_space: u32,
 
         pub tcpi_total_retrans: u32,
+
+        // Fields added in later kernels. If running on an older kernel, getsockopt
+        // writes fewer bytes and the remaining fields stay zero-initialized.
+        pub tcpi_pacing_rate: u64,
+        pub tcpi_max_pacing_rate: u64,
+        pub tcpi_bytes_acked: u64,
     }
 
     pub fn get_tcp_info<S: AsRawFd>(socket: &S) -> std::io::Result<TcpInfoSnapshot> {
@@ -77,11 +83,22 @@ mod linux {
         };
 
         if ret == 0 {
+            // tcpi_bytes_acked was added in Linux 4.2 (2015); report it whenever
+            // getsockopt returned a struct large enough to include it. Zero is a
+            // valid value (e.g., aborted before first ACK), so don't treat it as
+            // "missing" — that would skip the overcount clamp in that exact case.
+            let acked_end = mem::offset_of!(TcpInfo, tcpi_bytes_acked) + mem::size_of::<u64>();
+            let bytes_acked = if (len as usize) >= acked_end {
+                Some(info.tcpi_bytes_acked)
+            } else {
+                None
+            };
             Ok(TcpInfoSnapshot {
                 retransmits: info.tcpi_total_retrans as u64,
                 rtt_us: info.tcpi_rtt,
                 rtt_var_us: info.tcpi_rttvar,
                 cwnd: info.tcpi_snd_cwnd,
+                bytes_acked,
             })
         } else {
             Err(std::io::Error::last_os_error())
@@ -166,6 +183,7 @@ mod macos {
                 rtt_us: info.tcpi_srtt,
                 rtt_var_us: info.tcpi_rttvar,
                 cwnd: info.tcpi_snd_cwnd,
+                bytes_acked: None, // macOS TCP_CONNECTION_INFO doesn't expose this
             })
         } else {
             Err(std::io::Error::last_os_error())
@@ -183,6 +201,7 @@ mod fallback {
             rtt_us: 0,
             rtt_var_us: 0,
             cwnd: 0,
+            bytes_acked: None,
         })
     }
 
@@ -192,6 +211,7 @@ mod fallback {
             rtt_us: 0,
             rtt_var_us: 0,
             cwnd: 0,
+            bytes_acked: None,
         })
     }
 }
