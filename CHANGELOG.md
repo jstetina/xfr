@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 - **Default to kernel TCP autotuning** (issue #60) — xfr no longer forces `SO_SNDBUF`/`SO_RCVBUF` to 4 MB on either side by default; both ends let the kernel autotune unless the user passes `-w`/`--window`. When set, the client's value propagates to the server over the control protocol so both sides apply the socket option symmetrically (matching iperf3). Reported by @matttbe.
+- **Duplicate receive-error log on the server** (issue #54) — `tcp::receive_data` and `tcp::receive_data_half` each warned at the read-error site, and the caller then warned again when it saw the returned `Err`. The duplicate inner `warn!` is removed so receive errors now log exactly once, matching the send path's pattern. Reported by @matttbe.
 
   Caveats:
   - Loopback / intra-host benchmark numbers may decrease by roughly 10% — this is expected; the previous numbers were inflated by the oversized app-applied buffer.

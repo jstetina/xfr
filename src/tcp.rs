@@ -522,7 +522,8 @@ pub async fn receive_data(
                             }
                             break;
                         }
-                        warn!("Receive error on stream {}: {}", stats.stream_id, e);
+                        // Caller logs via the spawn-level warn!("Stream X receive error: ...");
+                        // don't log here too.
                         return Err(e.into());
                     }
                 }
@@ -762,7 +763,8 @@ pub async fn receive_data_half(
                             }
                             break;
                         }
-                        warn!("Receive error on stream {}: {}", stats.stream_id, e);
+                        // Caller logs via the spawn-level warn!("Stream X receive error: ...");
+                        // don't log here too.
                         return Err(e.into());
                     }
                 }
