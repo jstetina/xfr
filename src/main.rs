@@ -340,7 +340,7 @@ enum Commands {
         rate_limit: Option<u32>,
 
         /// Rate limit time window
-        #[arg(long, default_value = "60s", value_parser = parse_duration)]
+        #[arg(long, default_value = "60s", value_parser = parse_nonzero_duration)]
         rate_limit_window: Duration,
 
         /// Allow IP/subnet (can be repeated)
@@ -400,6 +400,17 @@ fn parse_duration(s: &str) -> Result<Duration, String> {
         return Ok(Duration::from_secs(secs));
     }
     humantime::parse_duration(s).map_err(|e| e.to_string())
+}
+
+/// Duration parser that rejects zero. For flags where zero is not a valid
+/// sentinel (e.g. `--rate-limit-window`, which would divide-by-zero the
+/// cleanup-task interval in `tokio::time::interval`).
+fn parse_nonzero_duration(s: &str) -> Result<Duration, String> {
+    let d = parse_duration(s)?;
+    if d.is_zero() {
+        return Err("Duration must be greater than 0".to_string());
+    }
+    Ok(d)
 }
 
 fn parse_test_duration(s: &str) -> Result<Duration, String> {
@@ -1858,6 +1869,30 @@ mod tests {
         assert!(parse_duration("abc").is_err());
         assert!(parse_duration("10q").is_err()); // unknown unit
         assert!(parse_duration("").is_err());
+    }
+
+    #[test]
+    fn test_parse_nonzero_duration_rejects_zero_variants() {
+        // Bare-integer 0 and any unit-suffixed zero must fail — the rate-limit
+        // cleanup task uses `window / 2` as a tokio::time::interval which
+        // panics on Duration::ZERO.
+        assert!(parse_nonzero_duration("0").is_err());
+        assert!(parse_nonzero_duration("0s").is_err());
+        assert!(parse_nonzero_duration("0ms").is_err());
+
+        // Non-zero values still parse the same as parse_duration.
+        assert_eq!(parse_nonzero_duration("1").unwrap(), Duration::from_secs(1));
+        assert_eq!(
+            parse_nonzero_duration("60s").unwrap(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            parse_nonzero_duration("500ms").unwrap(),
+            Duration::from_millis(500)
+        );
+
+        // Garbage still fails.
+        assert!(parse_nonzero_duration("abc").is_err());
     }
 
     #[test]
