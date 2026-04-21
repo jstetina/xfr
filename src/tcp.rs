@@ -16,7 +16,6 @@ use crate::stats::StreamStats;
 use crate::tcp_info::get_tcp_info;
 
 const DEFAULT_BUFFER_SIZE: usize = 128 * 1024; // 128 KB
-const HIGH_SPEED_BUFFER: usize = 4 * 1024 * 1024; // 4 MB for 10G+
 const SEND_TEARDOWN_GRACE: Duration = Duration::from_millis(250);
 // Post-cancel read window: covers the race where our receive side signals
 // cancel and drops the socket before the peer's own cancel_tx has fired
@@ -97,53 +96,6 @@ impl Default for TcpConfig {
             window_size: None,
             congestion: None,
             random_payload: false,
-        }
-    }
-}
-
-/// Threshold for auto-selecting high-speed configuration (1 MB)
-const HIGH_SPEED_WINDOW_THRESHOLD: usize = 1_000_000;
-
-impl TcpConfig {
-    pub fn high_speed() -> Self {
-        Self {
-            buffer_size: HIGH_SPEED_BUFFER,
-            nodelay: true,
-            window_size: Some(HIGH_SPEED_BUFFER),
-            congestion: None,
-            random_payload: false,
-        }
-    }
-
-    /// Create a config with auto-detection for high-speed mode.
-    /// Selects high_speed() when window_size > 1MB or when there's no bitrate limit.
-    pub fn with_auto_detect(
-        nodelay: bool,
-        window_size: Option<usize>,
-        bitrate_limit: Option<u64>,
-    ) -> Self {
-        // Auto-select high-speed mode when:
-        // 1. Window size is explicitly set to > 1MB, or
-        // 2. No bitrate limit is set (unlimited speed, including explicit -b 0)
-        let use_high_speed = window_size
-            .map(|w| w > HIGH_SPEED_WINDOW_THRESHOLD)
-            .unwrap_or(false)
-            || !matches!(bitrate_limit, Some(bps) if bps > 0);
-
-        if use_high_speed && window_size.is_none() {
-            // Use full high-speed config with large buffers
-            let mut config = Self::high_speed();
-            config.nodelay = nodelay;
-            config
-        } else {
-            // Use user-specified or default settings
-            Self {
-                buffer_size: window_size.unwrap_or(DEFAULT_BUFFER_SIZE),
-                nodelay,
-                window_size,
-                congestion: None,
-                random_payload: false,
-            }
         }
     }
 }
@@ -831,17 +783,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_default_config() {
+    fn test_default_config_leaves_kernel_autotune_alone() {
         let config = TcpConfig::default();
         assert_eq!(config.buffer_size, DEFAULT_BUFFER_SIZE);
         assert!(!config.nodelay);
-    }
-
-    #[test]
-    fn test_high_speed_config() {
-        let config = TcpConfig::high_speed();
-        assert_eq!(config.buffer_size, HIGH_SPEED_BUFFER);
-        assert!(config.nodelay);
+        assert!(
+            config.window_size.is_none(),
+            "default must not force SO_SNDBUF/SO_RCVBUF — leave it to the kernel"
+        );
     }
 
     #[test]
