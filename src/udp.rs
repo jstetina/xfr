@@ -64,6 +64,7 @@ pub struct JitterCalculator {
     last_send_time: Option<u64>,
     last_recv_time: Option<Instant>,
     jitter: f64,
+    jitter_max: f64,
 }
 
 impl JitterCalculator {
@@ -72,6 +73,7 @@ impl JitterCalculator {
             last_send_time: None,
             last_recv_time: None,
             jitter: 0.0,
+            jitter_max: 0.0,
         }
     }
 
@@ -85,6 +87,9 @@ impl JitterCalculator {
             let d = (recv_diff - send_diff).abs() as f64;
 
             self.jitter += (d - self.jitter) / 16.0;
+            if self.jitter > self.jitter_max {
+                self.jitter_max = self.jitter;
+            }
         }
 
         self.last_send_time = Some(send_time_us);
@@ -94,6 +99,10 @@ impl JitterCalculator {
 
     pub fn jitter_ms(&self) -> f64 {
         self.jitter / 1000.0
+    }
+
+    pub fn jitter_max_ms(&self) -> f64 {
+        self.jitter_max / 1000.0
     }
 }
 
@@ -472,6 +481,8 @@ pub async fn receive_udp(
             lost_percent: loss_percent,
             jitter_ms: jitter_calc.jitter_ms(),
             out_of_order,
+            jitter_max_ms: Some(jitter_calc.jitter_max_ms()),
+            packet_size: Some(UDP_PAYLOAD_SIZE as u32),
         },
         packets_sent,
     ))

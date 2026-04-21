@@ -312,18 +312,32 @@ impl TestStats {
             lost_percent: 0.0,
             jitter_ms: 0.0,
             out_of_order: 0,
+            jitter_max_ms: None,
+            packet_size: None,
         };
 
+        let mut jitter_max = 0.0f64;
+        let mut any_jitter_max = false;
         for s in stats.iter() {
             total.packets_sent += s.packets_sent;
             total.packets_received += s.packets_received;
             total.lost += s.lost;
             total.out_of_order += s.out_of_order;
             total.jitter_ms += s.jitter_ms;
+            if let Some(max) = s.jitter_max_ms {
+                jitter_max = jitter_max.max(max);
+                any_jitter_max = true;
+            }
+            if total.packet_size.is_none() {
+                total.packet_size = s.packet_size;
+            }
         }
 
         // Average jitter across streams
         total.jitter_ms /= stats.len() as f64;
+        if any_jitter_max {
+            total.jitter_max_ms = Some(jitter_max);
+        }
 
         // Recalculate loss percent from totals
         if total.packets_sent > 0 {
