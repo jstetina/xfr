@@ -105,8 +105,28 @@ fn configure_socket_buffers(stream: &TcpStream, buffer_size: usize) -> std::io::
     use std::os::unix::io::AsRawFd;
     use tracing::debug;
 
+    // setsockopt SO_SNDBUF/SO_RCVBUF takes a `c_int`. On 64-bit Unix that's i32,
+    // so reject out-of-range requests up front — otherwise `as c_int` would wrap
+    // to garbage (or worse, a negative value) and the kernel would reject or
+    // misapply the request with only a debug-level log of the fallout.
+    let size = libc::c_int::try_from(buffer_size).map_err(|_| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!(
+                "window size {} exceeds platform maximum ({} bytes)",
+                buffer_size,
+                libc::c_int::MAX
+            ),
+        )
+    })?;
+    if size <= 0 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "window size must be greater than zero",
+        ));
+    }
+
     let fd = stream.as_raw_fd();
-    let size = buffer_size as libc::c_int;
 
     // SAFETY: fd is a valid file descriptor from stream.as_raw_fd(),
     // size is a valid c_int pointer, and size_of::<c_int>() is correct.
@@ -791,6 +811,34 @@ mod tests {
             config.window_size.is_none(),
             "default must not force SO_SNDBUF/SO_RCVBUF — leave it to the kernel"
         );
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn test_configure_socket_buffers_rejects_values_above_c_int_max() {
+        // The wire protocol allows window_size up to u64::MAX. If a caller
+        // lets that value reach setsockopt, `as c_int` would wrap silently.
+        // Any value above c_int::MAX must surface as an InvalidInput error
+        // rather than being quietly misapplied.
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let connect = tokio::net::TcpStream::connect(addr);
+        let accept = listener.accept();
+        let (client, _server) = tokio::join!(connect, accept);
+        let client = client.unwrap();
+
+        let huge = libc::c_int::MAX as usize + 1;
+        let err = configure_socket_buffers(&client, huge).expect_err("expected error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
+        let msg = err.to_string();
+        assert!(
+            msg.contains("exceeds platform maximum"),
+            "unexpected error message: {msg}"
+        );
+
+        // Zero is not a sensible window either.
+        let err = configure_socket_buffers(&client, 0).expect_err("expected error");
+        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

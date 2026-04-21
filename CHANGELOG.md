@@ -15,7 +15,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Smoothed TUI jitter reading** (issue #48) — the UDP stats panel now shows jitter averaged over a 10-second rolling window rather than the raw per-second sample. The data pipeline is unchanged (samples still arrive every second from the server); only the aggregate display is smoothed. Per-stream jitter in the streams view continues to show the latest interval. While the test is running, the label shows `Jitter (10s):`; once completed, it reverts to `Jitter:` with the authoritative final value from the server's result.
 
 ### Fixed
-- **Default to kernel TCP autotuning** (issue #60) — xfr no longer forces `SO_SNDBUF`/`SO_RCVBUF` to 4 MB on either side by default; both ends let the kernel autotune unless the user passes `-w`/`--window`. When set, the client's value propagates to the server over the control protocol so both sides setsockopt symmetrically (matching iperf3). Loopback / intra-host benchmark numbers may decrease by roughly 10% as a result — this is expected; the previous numbers were inflated by the oversized app-applied buffer. Reported by @matttbe.
+- **Default to kernel TCP autotuning** (issue #60) — xfr no longer forces `SO_SNDBUF`/`SO_RCVBUF` to 4 MB on either side by default; both ends let the kernel autotune unless the user passes `-w`/`--window`. When set, the client's value propagates to the server over the control protocol so both sides apply the socket option symmetrically (matching iperf3). Reported by @matttbe.
+
+  Caveats:
+  - Loopback / intra-host benchmark numbers may decrease by roughly 10% — this is expected; the previous numbers were inflated by the oversized app-applied buffer.
+  - On high-RTT paths, very short tests (e.g. `-t 1s` at high bitrate) may now show ramp-up-limited throughput in the final summary because kernel autotune takes a handful of RTTs to grow the window. Use a longer `-t`, or pass an explicit `-w` to skip autotune. Note that `-O`/`--omit` only hides the early intervals from output — the server-side final summary is still computed over the full test duration.
+  - Explicit window sizes above `c_int::MAX` (≈2.1 GB on 64-bit) are now rejected with `InvalidInput` instead of silently wrapping before `setsockopt`.
 
 ## [0.9.8] - 2026-04-17
 
