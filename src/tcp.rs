@@ -24,21 +24,40 @@ const SEND_TEARDOWN_GRACE: Duration = Duration::from_millis(250);
 // bytes aren't counted in stats, so no accuracy impact on throughput.
 const RECEIVE_CANCEL_DRAIN_GRACE: Duration = Duration::from_millis(200);
 
-// Linux UAPI `TCP_IS_MPTCP` (include/uapi/linux/tcp.h). Not exposed by the
-// `libc` crate as of this writing; `linux-raw-sys` defines it as 43 across
-// every Linux arch, so it's safe to hard-code.
+// Linux UAPI `TCP_IS_MPTCP` (include/uapi/linux/tcp.h, Linux 6.10+).
+// Not exposed by the `libc` crate as of this writing; `linux-raw-sys` defines
+// it as 43 across every Linux arch.
 #[cfg(target_os = "linux")]
 const TCP_IS_MPTCP: libc::c_int = 43;
 
+// Linux UAPI MPTCP socket option constants (include/uapi/linux/mptcp.h).
+// Used as a fallback on kernels older than 6.10 (which don't have
+// TCP_IS_MPTCP) but new enough to have MPTCP_INFO (Linux 5.16+).
+#[cfg(target_os = "linux")]
+const SOL_MPTCP: libc::c_int = 284;
+#[cfg(target_os = "linux")]
+const MPTCP_INFO: libc::c_int = 1;
+
 /// Returns true if the socket was created with `IPPROTO_MPTCP` and the kernel
 /// considers it an active MPTCP connection (not a fallback to plain TCP).
+///
+/// Uses two probes for broader kernel coverage:
+/// 1. `getsockopt(IPPROTO_TCP, TCP_IS_MPTCP)` — Linux 6.10+. Returns 0/1
+///    for any TCP socket. Fast and unambiguous when present.
+/// 2. `getsockopt(SOL_MPTCP, MPTCP_INFO)` — Linux 5.16+. Succeeds only on
+///    actual MPTCP sockets; returns EOPNOTSUPP on plain TCP. We don't care
+///    about the contents, just whether the call succeeds.
+///
+/// Pre-5.16 kernels with active MPTCP fall through to false and skip the
+/// fastclose path; teardown stays graceful (the prior behavior).
 #[cfg(target_os = "linux")]
 fn is_mptcp_socket(fd: std::os::unix::io::RawFd) -> bool {
+    // Fast path: TCP_IS_MPTCP (6.10+).
     let mut v: libc::c_int = 0;
     let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
     // SAFETY: `v` is a valid c_int pointer for `len` bytes; getsockopt may
-    // fail (e.g. on a non-MPTCP socket or older kernel without TCP_IS_MPTCP),
-    // we treat any failure as "not MPTCP" and skip the fastclose path.
+    // fail with ENOPROTOOPT on older kernels, in which case we fall through
+    // to the MPTCP_INFO probe below.
     let ret = unsafe {
         libc::getsockopt(
             fd,
@@ -48,7 +67,26 @@ fn is_mptcp_socket(fd: std::os::unix::io::RawFd) -> bool {
             &mut len,
         )
     };
-    ret == 0 && v == 1
+    if ret == 0 {
+        return v == 1;
+    }
+
+    // Fallback: MPTCP_INFO (5.16+). The struct is small (~50 bytes today)
+    // and forward-compatible; oversize the buffer to absorb future growth.
+    // SAFETY: buffer is a valid byte region for the declared length; we
+    // ignore the contents and only inspect the return code.
+    let mut info = [0u8; 256];
+    let mut len = info.len() as libc::socklen_t;
+    let ret = unsafe {
+        libc::getsockopt(
+            fd,
+            SOL_MPTCP,
+            MPTCP_INFO,
+            info.as_mut_ptr() as *mut libc::c_void,
+            &mut len,
+        )
+    };
+    ret == 0
 }
 
 /// Force MP_FASTCLOSE on an MPTCP socket via `connect(AF_UNSPEC)`.
