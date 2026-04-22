@@ -101,6 +101,17 @@ pub struct App {
 
     // Update notification
     pub update_available: Option<String>,
+
+    /// Server-reported version (e.g. "xfr/0.9.8") captured from the `Hello`
+    /// handshake. None until the handshake completes; surfaced in the UI so
+    /// cross-version test pairings are visible at a glance.
+    pub server_version: Option<String>,
+
+    /// Wall-clock instant at which the current pause started. `Some` while
+    /// `state == Paused`, `None` otherwise. On resume we advance `start_time`
+    /// forward by the paused duration so `tick()`'s `start_time.elapsed()`
+    /// naturally excludes time spent paused.
+    pause_started_at: Option<Instant>,
 }
 
 impl App {
@@ -176,6 +187,8 @@ impl App {
             prev_udp_lost: 0,
 
             update_available: None,
+            server_version: None,
+            pause_started_at: None,
         }
     }
 
@@ -268,8 +281,39 @@ impl App {
         self.log("Connected to server.");
     }
 
+    /// Refresh `elapsed` from the local wall clock. Called from the TUI loop
+    /// once per iteration so the counter stays live even when server
+    /// `Interval` progress messages are delayed (e.g. packet-drop bursts on
+    /// the control channel). `elapsed` is wall-clock-authoritative during
+    /// Running — `on_progress` does NOT update it (doing so was a visual
+    /// no-op since the next tick immediately overwrote the server's value).
+    /// `on_result` pins `self.duration` once completed.
+    pub fn tick(&mut self) {
+        if self.state == AppState::Running
+            && let Some(start) = self.start_time
+        {
+            self.elapsed = start.elapsed();
+        }
+    }
+
+    /// Record the server's advertised version (from the `Hello` handshake).
+    /// Stored for UI display only. The string is sanitized before storage —
+    /// see [`sanitize_server_version`] — since it crosses a network trust
+    /// boundary and lands in a terminal. A hostile or compromised server
+    /// could otherwise smuggle terminal escape sequences or an oversized
+    /// payload into our display.
+    pub fn set_server_version(&mut self, version: String) {
+        self.server_version = Some(sanitize_server_version(&version));
+    }
+
     pub fn on_progress(&mut self, progress: TestProgress) {
-        self.elapsed = Duration::from_millis(progress.elapsed_ms);
+        // `elapsed` is intentionally NOT written here. `tick()` owns it during
+        // Running from the local wall clock (pause-aware), so the TUI stays
+        // live between progress messages. Writing from `progress.elapsed_ms`
+        // on each message caused the next tick() to immediately overwrite it
+        // anyway, producing a one-frame flash of the server-authoritative
+        // value that users couldn't perceive. `on_result()` pins the final
+        // once the test completes.
         self.total_bytes = progress.total_bytes;
         self.current_throughput_mbps = progress.throughput_mbps;
 
@@ -434,9 +478,20 @@ impl App {
         match self.state {
             AppState::Running => {
                 self.state = AppState::Paused;
+                self.pause_started_at = Some(Instant::now());
                 self.log("Test paused");
             }
             AppState::Paused => {
+                // Shift start_time forward by the paused duration so the
+                // elapsed counter recomputed by `tick()` excludes the pause.
+                // Server's own `elapsed_ms` already excludes pause time, so
+                // this keeps the two sources in agreement and avoids a
+                // visible forward-then-backward jump at resume.
+                if let (Some(paused_at), Some(start)) =
+                    (self.pause_started_at.take(), self.start_time.as_mut())
+                {
+                    *start += paused_at.elapsed();
+                }
                 self.state = AppState::Running;
                 self.log("Test resumed");
             }
@@ -493,18 +548,66 @@ impl App {
         }
     }
 
-    /// Value and label for the UDP jitter line in the stats panel.
-    /// Rolling 10s average while the test is running so per-second noise
-    /// doesn't make the number jump around (issue #48); switches to the
-    /// authoritative run-level final value from `on_result` once the test
-    /// has completed, so the completed screen matches the server's summary.
-    pub fn jitter_display(&self) -> (f64, &'static str) {
+    /// Jitter values for the UDP stats panel.
+    ///
+    /// - `primary` is the latest per-interval aggregate while running, or
+    ///   the server's authoritative final once the test has completed.
+    /// - `smoothed` is the 10-second rolling mean, shown alongside `primary`
+    ///   only during the running state so users can see both the
+    ///   instantaneous reading and the smoothed view. None when completed
+    ///   (the final value is the authoritative one — a smoothed comparison
+    ///   would just be noise at that point).
+    ///
+    /// Surfacing both resolves the cognitive friction where the rolling mean
+    /// could stay above a sample's minimum (issue #48 follow-up).
+    pub fn jitter_display(&self) -> JitterDisplay {
         if self.state == AppState::Completed {
-            (self.udp_jitter_ms, "Jitter:       ")
+            JitterDisplay {
+                primary: self.udp_jitter_ms,
+                smoothed: None,
+            }
         } else {
-            (self.avg_jitter_ms(), "Jitter (10s): ")
+            JitterDisplay {
+                primary: self.udp_jitter_ms,
+                smoothed: Some(self.avg_jitter_ms()),
+            }
         }
     }
+}
+
+/// Display-safe normalization of a server-advertised version string.
+///
+/// The input comes from a remote `Hello` message and is rendered verbatim
+/// into the user's terminal, so it needs to be treated as untrusted:
+/// - non-printable / control bytes are stripped (prevents ANSI escape
+///   injection that could clear the screen, move the cursor, spoof
+///   content, or run the terminal's exotic OSC commands)
+/// - the result is clamped to a short length (prevents a malicious peer
+///   from monopolizing the Configuration panel row or blowing up render
+///   cost)
+/// - an empty result falls back to `(unknown)` so the UI still makes sense
+pub fn sanitize_server_version(raw: &str) -> String {
+    const MAX_LEN: usize = 32;
+    let cleaned: String = raw
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_LEN)
+        .collect();
+    if cleaned.is_empty() {
+        "(unknown)".to_string()
+    } else {
+        cleaned
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JitterDisplay {
+    /// The value to color-code and show first. Latest per-interval aggregate
+    /// while running; server's authoritative final when completed.
+    pub primary: f64,
+    /// 10-second rolling mean — shown in parentheses alongside `primary`
+    /// while running, `None` when the test is complete.
+    pub smoothed: Option<f64>,
 }
 
 impl Default for App {
@@ -529,18 +632,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jitter_display_uses_rolling_window_while_running() {
+    fn jitter_display_returns_both_instant_and_smoothed_while_running() {
         let mut app = App::default();
         app.state = AppState::Running;
-        // Simulate 3 per-second jitter samples: 2, 4, 6 ms → mean 4.0.
-        app.udp_jitter_ms = 6.0; // last sample, what a non-smoothed UI would show
+        // Simulate 3 per-second jitter samples: 2, 4, 6 ms → rolling mean 4.0.
+        // Latest per-interval aggregate is 6.0 ms (what the server just sent).
+        app.udp_jitter_ms = 6.0;
         app.jitter_history.extend([2.0, 4.0, 6.0]);
 
-        let (value, label) = app.jitter_display();
-        assert_eq!(label, "Jitter (10s): ");
+        let jd = app.jitter_display();
         assert!(
-            (value - 4.0).abs() < f64::EPSILON,
-            "expected rolling mean 4.0, got {value}"
+            (jd.primary - 6.0).abs() < f64::EPSILON,
+            "primary should be latest per-interval aggregate 6.0, got {}",
+            jd.primary
+        );
+        assert!(
+            jd.smoothed.is_some(),
+            "running state must include the smoothed mean alongside primary"
+        );
+        let avg = jd.smoothed.unwrap();
+        assert!(
+            (avg - 4.0).abs() < f64::EPSILON,
+            "smoothed mean should be 4.0, got {avg}"
         );
     }
 
@@ -549,16 +662,21 @@ mod tests {
         let mut app = App::default();
         // Run-level final jitter from the server (via on_result) is different
         // from whatever the last 10s of progress samples averaged to — the
-        // completed screen must show the authoritative final, not the tail.
+        // completed screen must show the authoritative final, and suppress
+        // the smoothed companion so the display stays unambiguous.
         app.state = AppState::Completed;
         app.udp_jitter_ms = 1.23;
         app.jitter_history.extend([9.9, 9.9, 9.9]); // stale tail samples
 
-        let (value, label) = app.jitter_display();
-        assert_eq!(label, "Jitter:       ");
+        let jd = app.jitter_display();
         assert!(
-            (value - 1.23).abs() < f64::EPSILON,
-            "expected authoritative 1.23, got {value}"
+            (jd.primary - 1.23).abs() < f64::EPSILON,
+            "expected authoritative 1.23, got {}",
+            jd.primary
+        );
+        assert_eq!(
+            jd.smoothed, None,
+            "completed state must not show a smoothed companion"
         );
     }
 
@@ -566,5 +684,158 @@ mod tests {
     fn avg_jitter_ms_is_zero_with_no_samples() {
         let app = App::default();
         assert_eq!(app.avg_jitter_ms(), 0.0);
+    }
+
+    #[test]
+    fn tick_refreshes_elapsed_while_running() {
+        // When Running with start_time set, tick() should update elapsed from
+        // the wall clock so the UI stays live between progress messages. This
+        // is the core fix for issue #62: progress-message starvation during
+        // packet-drop bursts left `elapsed` stale.
+        let mut app = App::default();
+        app.state = AppState::Running;
+        app.start_time = Some(Instant::now() - Duration::from_secs(3));
+        app.elapsed = Duration::ZERO; // stale — what a drop burst leaves behind
+
+        app.tick();
+
+        assert!(
+            app.elapsed >= Duration::from_secs(3),
+            "expected elapsed ≥ 3s from wall clock, got {:?}",
+            app.elapsed
+        );
+    }
+
+    #[test]
+    fn tick_is_noop_outside_running() {
+        // Only Running should advance elapsed from wall clock. Other states
+        // either don't have a meaningful elapsed (Connecting/Error) or pin
+        // their own value (Completed sets duration, Paused should freeze).
+        for state in [
+            AppState::Connecting,
+            AppState::Paused,
+            AppState::Completed,
+            AppState::Error,
+        ] {
+            let mut app = App::default();
+            app.state = state;
+            app.start_time = Some(Instant::now() - Duration::from_secs(5));
+            app.elapsed = Duration::from_secs(42); // sentinel
+
+            app.tick();
+
+            assert_eq!(
+                app.elapsed,
+                Duration::from_secs(42),
+                "tick() must not mutate elapsed in state {state:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn set_server_version_populates_field() {
+        let mut app = App::default();
+        assert!(app.server_version.is_none());
+        app.set_server_version("xfr/0.9.8".to_string());
+        assert_eq!(app.server_version.as_deref(), Some("xfr/0.9.8"));
+    }
+
+    #[test]
+    fn sanitize_server_version_strips_control_bytes() {
+        // ANSI escape sequences a hostile server could send to e.g. clear the
+        // screen or move the cursor. All control bytes (ESC, CR, LF, NUL,
+        // etc.) must be stripped before the string lands in the terminal.
+        let dirty = "xfr/\x1b[2J\x1b[Hmalicious\r\n\x00";
+        assert_eq!(sanitize_server_version(dirty), "xfr/[2J[Hmalicious");
+    }
+
+    #[test]
+    fn sanitize_server_version_caps_length() {
+        // A peer advertising a 10 KB version string must not monopolize the
+        // Configuration panel row or blow up render cost.
+        let long = "x".repeat(10_000);
+        let cleaned = sanitize_server_version(&long);
+        assert!(cleaned.chars().count() <= 32);
+        assert!(cleaned.starts_with("xxxxx"));
+    }
+
+    #[test]
+    fn sanitize_server_version_falls_back_for_empty_or_all_control() {
+        assert_eq!(sanitize_server_version(""), "(unknown)");
+        // All control characters → empty after filter → fallback.
+        assert_eq!(sanitize_server_version("\x1b\x00\r\n"), "(unknown)");
+    }
+
+    #[test]
+    fn set_server_version_sanitizes_input() {
+        // set_server_version routes through sanitize_server_version, so a
+        // hostile Hello.server value never reaches the renderer as-is.
+        let mut app = App::default();
+        app.set_server_version("xfr/0.9.9\x1b[31m".to_string());
+        assert_eq!(app.server_version.as_deref(), Some("xfr/0.9.9[31m"));
+    }
+
+    #[test]
+    fn on_progress_does_not_overwrite_elapsed() {
+        // Regression: before this fix, on_progress wrote self.elapsed from
+        // progress.elapsed_ms, which the next tick() immediately overwrote
+        // from the wall clock — so the server's authoritative value never
+        // actually rendered. We removed the write entirely; elapsed is
+        // wall-clock authoritative during Running. This test pins that
+        // contract so we don't accidentally re-introduce the write.
+        let mut app = App::default();
+        app.state = AppState::Running;
+        app.start_time = Some(Instant::now() - Duration::from_secs(5));
+        app.elapsed = Duration::from_secs(5); // wall-clock derived
+
+        app.on_progress(crate::client::TestProgress {
+            elapsed_ms: 9_999, // a server value far off from wall clock
+            total_bytes: 0,
+            throughput_mbps: 0.0,
+            streams: vec![],
+            rtt_us: None,
+            cwnd: None,
+            total_retransmits: None,
+            bytes_sent: None,
+            bytes_received: None,
+            throughput_send_mbps: None,
+            throughput_recv_mbps: None,
+        });
+
+        assert_eq!(
+            app.elapsed,
+            Duration::from_secs(5),
+            "on_progress must not mutate elapsed; tick() owns it"
+        );
+    }
+
+    #[test]
+    fn tick_elapsed_excludes_paused_time() {
+        // Timeline (simulated):
+        //   T-5s: test started       (start_time = now - 5s)
+        //   T-3s: user hit `p`       (pause_started_at backdated to 3s ago)
+        //   T-0s: user hit `p` again (resume, now)
+        // Wall-clock from start = 5s; of which 3s was paused, 2s actively
+        // running. Resume must shift start_time forward by the pause duration
+        // so tick() shows ~2s, not 5s.
+        let mut app = App::default();
+        app.state = AppState::Running;
+        app.start_time = Some(Instant::now() - Duration::from_secs(5));
+
+        app.toggle_pause();
+        assert_eq!(app.state, AppState::Paused);
+        // Backdate pause_started_at to 3s ago to simulate a 3s pause window.
+        app.pause_started_at = Some(Instant::now() - Duration::from_secs(3));
+
+        app.toggle_pause();
+        assert_eq!(app.state, AppState::Running);
+        app.tick();
+
+        let elapsed = app.elapsed;
+        assert!(
+            elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(3),
+            "elapsed should be ~2s (wall-clock 5s minus 3s pause), got {:?}",
+            elapsed
+        );
     }
 }

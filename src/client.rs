@@ -148,6 +148,9 @@ pub struct Client {
     pause_request_tx: Arc<Mutex<Option<watch::Sender<bool>>>>,
     /// Whether the server supports pause/resume capability
     server_supports_pause: Arc<Mutex<Option<bool>>>,
+    /// Server's advertised version string (from ServerHello), exposed via
+    /// [`Client::server_version`] for the TUI to display.
+    server_version: Arc<Mutex<Option<String>>>,
 }
 
 impl Client {
@@ -159,7 +162,14 @@ impl Client {
             pause_tx: Arc::new(Mutex::new(None)),
             pause_request_tx: Arc::new(Mutex::new(None)),
             server_supports_pause: Arc::new(Mutex::new(None)),
+            server_version: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Returns the server's advertised version string (from the `Hello`
+    /// handshake) if it has been received, otherwise `None`.
+    pub fn server_version(&self) -> Option<String> {
+        self.server_version.lock().clone()
     }
 
     pub async fn run(
@@ -210,6 +220,10 @@ impl Client {
         *self.server_supports_pause.lock() = None;
         *self.pause_tx.lock() = None;
         *self.pause_request_tx.lock() = None;
+        // Reset server version too — a reused Client connecting to a server
+        // that doesn't advertise `server` in its Hello must not carry the
+        // prior peer's string forward into the TUI display.
+        *self.server_version.lock() = None;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -233,6 +247,7 @@ impl Client {
                 version,
                 capabilities,
                 auth,
+                server,
                 ..
             } => {
                 if !versions_compatible(&version, PROTOCOL_VERSION) {
@@ -244,6 +259,10 @@ impl Client {
                 }
                 debug!("Server capabilities: {:?}", capabilities);
                 server_capabilities = capabilities;
+                // Direct assignment (Option<String> → Option<String>) so that
+                // a handshake with an absent `server` field clears any stale
+                // value left over from a previous peer in the same process.
+                *self.server_version.lock() = server;
 
                 // Handle authentication if server requires it
                 if let Some(challenge) = auth {
@@ -1034,6 +1053,10 @@ impl Client {
         *self.server_supports_pause.lock() = None;
         *self.pause_tx.lock() = None;
         *self.pause_request_tx.lock() = None;
+        // Reset server version too — a reused Client connecting to a server
+        // that doesn't advertise `server` in its Hello must not carry the
+        // prior peer's string forward into the TUI display.
+        *self.server_version.lock() = None;
 
         // Resolve target address first, then create endpoint with matching address family
         let addr = net::resolve_host(
@@ -1072,6 +1095,7 @@ impl Client {
                 version,
                 capabilities,
                 auth,
+                server,
                 ..
             } => {
                 if !versions_compatible(&version, PROTOCOL_VERSION) {
@@ -1083,6 +1107,10 @@ impl Client {
                 }
                 debug!("Server capabilities: {:?}", capabilities);
                 server_capabilities = capabilities;
+                // Direct assignment (Option<String> → Option<String>) so that
+                // a handshake with an absent `server` field clears any stale
+                // value left over from a previous peer in the same process.
+                *self.server_version.lock() = server;
 
                 // Handle authentication if server requires it
                 if let Some(challenge) = auth {
