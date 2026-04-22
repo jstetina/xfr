@@ -537,18 +537,41 @@ impl App {
         }
     }
 
-    /// Value and label for the UDP jitter line in the stats panel.
-    /// Rolling 10s average while the test is running so per-second noise
-    /// doesn't make the number jump around (issue #48); switches to the
-    /// authoritative run-level final value from `on_result` once the test
-    /// has completed, so the completed screen matches the server's summary.
-    pub fn jitter_display(&self) -> (f64, &'static str) {
+    /// Jitter values for the UDP stats panel.
+    ///
+    /// - `primary` is the latest per-interval aggregate while running, or
+    ///   the server's authoritative final once the test has completed.
+    /// - `smoothed` is the 10-second rolling mean, shown alongside `primary`
+    ///   only during the running state so users can see both the
+    ///   instantaneous reading and the smoothed view. None when completed
+    ///   (the final value is the authoritative one — a smoothed comparison
+    ///   would just be noise at that point).
+    ///
+    /// Surfacing both resolves the cognitive friction where the rolling mean
+    /// could stay above a sample's minimum (issue #48 follow-up).
+    pub fn jitter_display(&self) -> JitterDisplay {
         if self.state == AppState::Completed {
-            (self.udp_jitter_ms, "Jitter:       ")
+            JitterDisplay {
+                primary: self.udp_jitter_ms,
+                smoothed: None,
+            }
         } else {
-            (self.avg_jitter_ms(), "Jitter (10s): ")
+            JitterDisplay {
+                primary: self.udp_jitter_ms,
+                smoothed: Some(self.avg_jitter_ms()),
+            }
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct JitterDisplay {
+    /// The value to color-code and show first. Latest per-interval aggregate
+    /// while running; server's authoritative final when completed.
+    pub primary: f64,
+    /// 10-second rolling mean — shown in parentheses alongside `primary`
+    /// while running, `None` when the test is complete.
+    pub smoothed: Option<f64>,
 }
 
 impl Default for App {
@@ -573,18 +596,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn jitter_display_uses_rolling_window_while_running() {
+    fn jitter_display_returns_both_instant_and_smoothed_while_running() {
         let mut app = App::default();
         app.state = AppState::Running;
-        // Simulate 3 per-second jitter samples: 2, 4, 6 ms → mean 4.0.
-        app.udp_jitter_ms = 6.0; // last sample, what a non-smoothed UI would show
+        // Simulate 3 per-second jitter samples: 2, 4, 6 ms → rolling mean 4.0.
+        // Latest per-interval aggregate is 6.0 ms (what the server just sent).
+        app.udp_jitter_ms = 6.0;
         app.jitter_history.extend([2.0, 4.0, 6.0]);
 
-        let (value, label) = app.jitter_display();
-        assert_eq!(label, "Jitter (10s): ");
+        let jd = app.jitter_display();
         assert!(
-            (value - 4.0).abs() < f64::EPSILON,
-            "expected rolling mean 4.0, got {value}"
+            (jd.primary - 6.0).abs() < f64::EPSILON,
+            "primary should be latest per-interval aggregate 6.0, got {}",
+            jd.primary
+        );
+        assert!(
+            jd.smoothed.is_some(),
+            "running state must include the smoothed mean alongside primary"
+        );
+        let avg = jd.smoothed.unwrap();
+        assert!(
+            (avg - 4.0).abs() < f64::EPSILON,
+            "smoothed mean should be 4.0, got {avg}"
         );
     }
 
@@ -593,16 +626,21 @@ mod tests {
         let mut app = App::default();
         // Run-level final jitter from the server (via on_result) is different
         // from whatever the last 10s of progress samples averaged to — the
-        // completed screen must show the authoritative final, not the tail.
+        // completed screen must show the authoritative final, and suppress
+        // the smoothed companion so the display stays unambiguous.
         app.state = AppState::Completed;
         app.udp_jitter_ms = 1.23;
         app.jitter_history.extend([9.9, 9.9, 9.9]); // stale tail samples
 
-        let (value, label) = app.jitter_display();
-        assert_eq!(label, "Jitter:       ");
+        let jd = app.jitter_display();
         assert!(
-            (value - 1.23).abs() < f64::EPSILON,
-            "expected authoritative 1.23, got {value}"
+            (jd.primary - 1.23).abs() < f64::EPSILON,
+            "expected authoritative 1.23, got {}",
+            jd.primary
+        );
+        assert_eq!(
+            jd.smoothed, None,
+            "completed state must not show a smoothed companion"
         );
     }
 

@@ -353,19 +353,21 @@ fn draw_realtime_stats(frame: &mut Frame, app: &App, theme: &Theme, area: Rect) 
 
     // Right side: Jitter/Loss for UDP, RTT/Retrans for TCP
     let quality_lines = if app.protocol == crate::protocol::Protocol::Udp {
-        // Rolling 10s average while running, authoritative final value once
-        // completed — picked by App::jitter_display() so the state transition
-        // is covered by unit tests instead of only by inspection (issue #48).
-        let (jitter_val, jitter_label) = app.jitter_display();
-        let jitter_col = jitter_color(jitter_val, theme);
+        // Jitter line shows both the latest per-interval aggregate (primary,
+        // color-coded against the thresholds) and the 10-second rolling mean
+        // in parentheses while running. On completion only the authoritative
+        // final value is shown. See App::jitter_display (issue #48 follow-up).
+        let jd = app.jitter_display();
+        let jitter_col = jitter_color(jd.primary, theme);
+        let jitter_value = match jd.smoothed {
+            Some(avg) => format!("{:.2} ms (10s: {:.2} ms)", jd.primary, avg),
+            None => format!("{:.2} ms", jd.primary),
+        };
         let loss_col = loss_color(app.udp_lost_percent, theme);
         vec![
             Line::from(vec![
-                Span::styled(jitter_label, Style::default().fg(theme.text_dim)),
-                Span::styled(
-                    format!("{:.2} ms", jitter_val),
-                    Style::default().fg(jitter_col),
-                ),
+                Span::styled("Jitter:       ", Style::default().fg(theme.text_dim)),
+                Span::styled(jitter_value, Style::default().fg(jitter_col)),
             ]),
             Line::from(vec![
                 Span::styled("Packet Loss:  ", Style::default().fg(theme.text_dim)),

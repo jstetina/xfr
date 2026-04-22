@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Client/server version in the Configuration panel** (issue #62) — the TUI now shows `xfr/<client-version> ↔ <server-version>` so cross-version test pairings are obvious at a glance. Server version is captured from the `Hello` handshake (already wire-supported; just wasn't surfaced). Requested by @brettowe.
 
+### Changed
+- **TUI jitter line shows latest + smoothed together** (issue #48 follow-up) — the running display now reads `Jitter: 0.02 ms (10s: 0.03 ms)` so the latest per-interval aggregate and the 10-second rolling mean are visible side by side. Resolves the confusion where the rolling mean could stay above any single sample's value, making the live display look inconsistent with the server's authoritative final. Completed state still shows just the final value (no smoothing companion — the final is authoritative). Reported by @brettowe.
+
 ## [0.9.9] - 2026-04-21
 
 ### Added
