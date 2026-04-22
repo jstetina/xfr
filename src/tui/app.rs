@@ -106,6 +106,12 @@ pub struct App {
     /// handshake. None until the handshake completes; surfaced in the UI so
     /// cross-version test pairings are visible at a glance.
     pub server_version: Option<String>,
+
+    /// Wall-clock instant at which the current pause started. `Some` while
+    /// `state == Paused`, `None` otherwise. On resume we advance `start_time`
+    /// forward by the paused duration so `tick()`'s `start_time.elapsed()`
+    /// naturally excludes time spent paused.
+    pause_started_at: Option<Instant>,
 }
 
 impl App {
@@ -182,6 +188,7 @@ impl App {
 
             update_available: None,
             server_version: None,
+            pause_started_at: None,
         }
     }
 
@@ -460,9 +467,20 @@ impl App {
         match self.state {
             AppState::Running => {
                 self.state = AppState::Paused;
+                self.pause_started_at = Some(Instant::now());
                 self.log("Test paused");
             }
             AppState::Paused => {
+                // Shift start_time forward by the paused duration so the
+                // elapsed counter recomputed by `tick()` excludes the pause.
+                // Server's own `elapsed_ms` already excludes pause time, so
+                // this keeps the two sources in agreement and avoids a
+                // visible forward-then-backward jump at resume.
+                if let (Some(paused_at), Some(start)) =
+                    (self.pause_started_at.take(), self.start_time.as_mut())
+                {
+                    *start += paused_at.elapsed();
+                }
                 self.state = AppState::Running;
                 self.log("Test resumed");
             }
@@ -646,5 +664,35 @@ mod tests {
         assert!(app.server_version.is_none());
         app.set_server_version("xfr/0.9.8".to_string());
         assert_eq!(app.server_version.as_deref(), Some("xfr/0.9.8"));
+    }
+
+    #[test]
+    fn tick_elapsed_excludes_paused_time() {
+        // Timeline (simulated):
+        //   T-5s: test started       (start_time = now - 5s)
+        //   T-3s: user hit `p`       (pause_started_at backdated to 3s ago)
+        //   T-0s: user hit `p` again (resume, now)
+        // Wall-clock from start = 5s; of which 3s was paused, 2s actively
+        // running. Resume must shift start_time forward by the pause duration
+        // so tick() shows ~2s, not 5s.
+        let mut app = App::default();
+        app.state = AppState::Running;
+        app.start_time = Some(Instant::now() - Duration::from_secs(5));
+
+        app.toggle_pause();
+        assert_eq!(app.state, AppState::Paused);
+        // Backdate pause_started_at to 3s ago to simulate a 3s pause window.
+        app.pause_started_at = Some(Instant::now() - Duration::from_secs(3));
+
+        app.toggle_pause();
+        assert_eq!(app.state, AppState::Running);
+        app.tick();
+
+        let elapsed = app.elapsed;
+        assert!(
+            elapsed >= Duration::from_secs(2) && elapsed < Duration::from_secs(3),
+            "elapsed should be ~2s (wall-clock 5s minus 3s pause), got {:?}",
+            elapsed
+        );
     }
 }

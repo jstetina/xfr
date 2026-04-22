@@ -220,6 +220,10 @@ impl Client {
         *self.server_supports_pause.lock() = None;
         *self.pause_tx.lock() = None;
         *self.pause_request_tx.lock() = None;
+        // Reset server version too — a reused Client connecting to a server
+        // that doesn't advertise `server` in its Hello must not carry the
+        // prior peer's string forward into the TUI display.
+        *self.server_version.lock() = None;
 
         let (reader, mut writer) = stream.into_split();
         let mut reader = BufReader::new(reader);
@@ -255,9 +259,10 @@ impl Client {
                 }
                 debug!("Server capabilities: {:?}", capabilities);
                 server_capabilities = capabilities;
-                if let Some(v) = server {
-                    *self.server_version.lock() = Some(v);
-                }
+                // Direct assignment (Option<String> → Option<String>) so that
+                // a handshake with an absent `server` field clears any stale
+                // value left over from a previous peer in the same process.
+                *self.server_version.lock() = server;
 
                 // Handle authentication if server requires it
                 if let Some(challenge) = auth {
@@ -1048,6 +1053,10 @@ impl Client {
         *self.server_supports_pause.lock() = None;
         *self.pause_tx.lock() = None;
         *self.pause_request_tx.lock() = None;
+        // Reset server version too — a reused Client connecting to a server
+        // that doesn't advertise `server` in its Hello must not carry the
+        // prior peer's string forward into the TUI display.
+        *self.server_version.lock() = None;
 
         // Resolve target address first, then create endpoint with matching address family
         let addr = net::resolve_host(
@@ -1098,9 +1107,10 @@ impl Client {
                 }
                 debug!("Server capabilities: {:?}", capabilities);
                 server_capabilities = capabilities;
-                if let Some(v) = server {
-                    *self.server_version.lock() = Some(v);
-                }
+                // Direct assignment (Option<String> → Option<String>) so that
+                // a handshake with an absent `server` field clears any stale
+                // value left over from a previous peer in the same process.
+                *self.server_version.lock() = server;
 
                 // Handle authentication if server requires it
                 if let Some(challenge) = auth {
