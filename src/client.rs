@@ -181,11 +181,8 @@ impl Client {
         if self.config.protocol == Protocol::Quic && self.config.bitrate.is_some() {
             warn!("Bitrate limit (-b) not implemented for QUIC; running at full speed");
         }
-        if self.config.protocol != Protocol::Tcp && self.config.tcp_congestion.is_some() {
-            warn!(
-                "--congestion is only supported for TCP; ignoring for {}",
-                self.config.protocol
-            );
+        if self.config.protocol == Protocol::Udp && self.config.tcp_congestion.is_some() {
+            warn!("--congestion is not supported for UDP; ignoring");
         }
 
         // Use QUIC transport if selected
@@ -1069,7 +1066,11 @@ impl Client {
         .ok_or_else(|| anyhow::anyhow!("No address found for {}", self.config.host))?;
 
         // Create QUIC endpoint with address family matching the target
-        let endpoint = quic::create_client_endpoint(addr, self.config.bind_addr)?;
+        let endpoint = quic::create_client_endpoint(
+            addr,
+            self.config.bind_addr,
+            self.config.tcp_congestion.as_deref(),
+        )?;
 
         info!("Connecting via QUIC to {}...", addr);
         let connection = quic::connect(&endpoint, addr).await?;
@@ -1354,13 +1355,19 @@ impl Client {
                     aggregate,
                     ..
                 } => {
+                    // QUIC RTT is not carried in server-side Interval messages (no TCP_INFO);
+                    // read it directly from Quinn's path statistics on the client connection.
+                    let rtt_us = aggregate.rtt_us.or_else(|| {
+                        let rtt = connection.stats().path.rtt;
+                        Some(rtt.as_micros().min(u32::MAX as u128) as u32)
+                    });
                     if let Some(ref tx) = progress_tx {
                         let _ = tx
                             .send(TestProgress {
                                 elapsed_ms,
                                 total_bytes: aggregate.bytes,
                                 throughput_mbps: aggregate.throughput_mbps,
-                                rtt_us: aggregate.rtt_us,
+                                rtt_us,
                                 cwnd: aggregate.cwnd,
                                 total_retransmits: None,
                                 streams,

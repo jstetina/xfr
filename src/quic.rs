@@ -39,13 +39,13 @@ use std::time::Duration;
 
 use quinn::{
     ClientConfig, Connection, Endpoint, EndpointConfig, RecvStream, SendStream, ServerConfig,
-    TransportConfig, VarInt,
+    TransportConfig, VarInt, congestion,
     crypto::rustls::{QuicClientConfig, QuicServerConfig},
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use socket2::{Protocol, Socket, Type};
 use tokio::sync::watch;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::net::AddressFamily;
 use crate::stats::StreamStats;
@@ -117,10 +117,13 @@ pub fn create_server_endpoint(
     Ok(endpoint)
 }
 
-/// Create a QUIC client endpoint with optional local bind address
+/// Create a QUIC client endpoint with optional local bind address and congestion controller.
+///
+/// `congestion` accepts `"cubic"` (default), `"reno"` / `"newreno"`, or `"bbr"`.
 pub fn create_client_endpoint(
     remote_addr: SocketAddr,
     local_bind: Option<SocketAddr>,
+    congestion_alg: Option<&str>,
 ) -> anyhow::Result<Endpoint> {
     // Client accepts any certificate (xfr uses its own auth mechanism)
     let mut crypto = rustls::ClientConfig::builder()
@@ -133,6 +136,19 @@ pub fn create_client_endpoint(
 
     let mut transport = TransportConfig::default();
     transport.max_concurrent_bidi_streams(VarInt::from_u32(129));
+
+    match congestion_alg {
+        Some("bbr") => {
+            transport.congestion_controller_factory(Arc::new(congestion::BbrConfig::default()));
+        }
+        Some("reno") | Some("newreno") => {
+            transport.congestion_controller_factory(Arc::new(congestion::NewRenoConfig::default()));
+        }
+        Some("cubic") | None => {} // CubicConfig is already the TransportConfig default
+        Some(other) => {
+            warn!("Unknown QUIC congestion controller '{}'; using cubic (default)", other);
+        }
+    }
 
     let quic_crypto = QuicClientConfig::try_from(crypto)?;
     let mut client_config = ClientConfig::new(Arc::new(quic_crypto));
